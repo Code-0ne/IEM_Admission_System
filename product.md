@@ -2,7 +2,7 @@
 
 > **Institute of Engineering & Management, Kolkata (IEM–UEM Group)**
 > Software Engineering Lab project, Team 7 "Adminatrix"
-> Stack: **MERN** (MongoDB, Express, React, Node.js)
+> Stack: **React + Vite, Node.js + Express, Supabase (PostgreSQL), MongoDB GridFS**
 
 **How to read this document.** Every feature is tagged with its SRS requirement ID (e.g. `FR11`). Anything that is a *decision we made that the SRS does not state* is marked **[ASSUMPTION]**. Anything that *changes* the current SRS is marked **[CHANGE]**. **Nothing is implemented yet:** this document is the design baseline for a fresh start. Section 15 lists what is still open.
 
@@ -22,8 +22,6 @@ It replaces a process that today is split across a public information page (`iem
 | Documents are verified, then fees paid, then paperwork submitted offline | Staff chase applicants by phone; no visibility | Upload once, verify online, flag specific documents with comments |
 | Payments come by NEFT, DD, net banking, cards, GPay/PhonePe | Staff must match bank entries to applicants by hand | Online gateway for instant confirmation; admin-recorded UTR/DD for offline payments |
 | Eligibility differs per course (10th/12th/PCM/graduation %) and is only a table | Ineligible applicants apply; officers re-check manually | Eligibility rules stored per course; AI course recommender; officer sees the numbers beside the rules |
-| Anti-ragging undertaking is a separate multi-step external process | Easy to forget; missing at the last minute | A mandatory document slot with the reference number captured |
-
 ### Goals
 1. Let an applicant finish an application without visiting the campus until final document submission.
 2. Give the admin team a verified, searchable, auditable record of every application.
@@ -33,7 +31,6 @@ It replaces a process that today is split across a public information page (`iem
 ### Non-goals (out of scope for this version)
 - Running the entrance exams or counselling (IEMJEE / IEMCET / CAT / MAT happen elsewhere; we record the result).
 - Scheduling and scoring MBA Aptitude and GD/PI rounds **[ASSUMPTION]**.
-- Integrating with the external anti-ragging site (we capture the reference number and the signed PDF only).
 - Post-admission student ERP, timetables, LMS.
 
 ---
@@ -81,7 +78,6 @@ Source: `https://iem.edu.in/admissions/` (page last modified 31 Aug 2026). **Fee
 ### Other published charges and rules
 - **Uniform ₹6,500** and **medical fitness report ₹1,000** for all candidates.
 - **Payment modes:** NEFT, DD (in favour of *Institute of Engineering & Management Trust*), net banking, credit/debit card, Google Pay, PhonePe.
-- **Anti-ragging undertaking:** student registers at the national anti-ragging site, receives a **reference number**, downloads the undertaking PDF, prints and signs it.
 - Admission offices exist only at the IEM Ashram Building (Salt Lake), the UEM Building (New Town) and UEM Jaipur. The portal should state this to help avoid fraud.
 
 ### 3.1 The existing admission form (reference for our form)
@@ -115,7 +111,7 @@ Source: screenshots of the live form, "Admission Form for the Session 2026-27", 
 
 ```
 Register → Verify OTP → Log in → Fill form (draft any time) → Upload documents
-   → Preview → Submit (locks, reference number issued) → [Admin review]
+   → Preview → Submit (locks, application number issued) → [Admin review]
    → Approved → Pay booking amount (+ fixed charges) → Admission Confirmed
 ```
 
@@ -125,7 +121,7 @@ Register → Verify OTP → Log in → Fill form (draft any time) → Upload doc
 4. **Save draft / resume** (`FR7`) and **edit any section** before submitting (`FR8`).
 5. **Upload documents** (`FR9`) into labelled slots. PDF/JPG/PNG, max 5 MB each, immediate format/size check with a specific reason on failure, progress bar, confirmation per file. An optional AI quality check may suggest re-uploading a blurry scan (`FR22`).
 6. **Preview** (`FR10`): read-only summary in form order with "jump back" links.
-7. **Submit** (`FR11`): enabled only when mandatory fields and documents pass. On submit the system assigns a **unique reference number**, locks the application, timestamps it, sets status **Submitted**.
+7. **Submit** (`FR11`): enabled only when mandatory fields and documents pass. On submit the system assigns a **unique application number** (format: `UEM-<YEAR>-<SEQ>`, e.g. `UEM-2026-00001`), locks the application, timestamps it, sets status **Submitted**. The application number is displayed to the applicant immediately and included in the confirmation email.
 8. **Track status** (`FR12`) on the dashboard; the status updates without re-login. **Notifications** (`FR13`) arrive in-app and by email.
 9. **After approval:** pay the admission/booking amount online (or by NEFT/DD, which an admin records); a **receipt PDF** (`FR16`) becomes available; status becomes **Admission Confirmed**.
 10. **Forgot password** (`FR14`): email OTP valid for 15 minutes.
@@ -144,7 +140,7 @@ Register → Verify OTP → Log in → Fill form (draft any time) → Upload doc
 ```mermaid
 stateDiagram-v2
     [*] --> Draft
-    Draft --> Submitted: Applicant submits (reference no. issued, locked)
+    Draft --> Submitted: Applicant submits (application no. issued, locked)
     Submitted --> UnderReview: Admin opens for review
     UnderReview --> CorrectionRequested: Admin flags an issue
     CorrectionRequested --> Submitted: Applicant fixes flagged items and resubmits
@@ -183,7 +179,7 @@ The system has seven modules (from the High-Level Design). Priority: **H**igh / 
 | Draft save with timestamp, auto-resume | FR7 | M |
 | Edit before submission | FR8 | M |
 | Read-only preview | FR10 | M |
-| Submit and lock, reference number | FR11 | H |
+| Submit and lock, application number generated | FR11 | H |
 | Status tracking with last-change date | FR12 | H |
 
 ### Module 3: Document management (Member B)
@@ -193,7 +189,7 @@ The system has seven modules (from the High-Level Design). Priority: **H**igh / 
 | Instant format/size validation with specific reasons | FR6.3, 6.4 | H |
 | Admin verify/flag with comment | FR6.2 | H |
 
-**Document slots [ASSUMPTION]:** `marksheet10`, `marksheet12`, `graduationMarksheet` (PG only), `idProof`, `photograph`, `antiRaggingUndertaking`, and `categoryCertificate` (required when the category is not General, as the existing form states). The SRS says only "mark sheets, ID proof, photograph"; we split marksheets by level and add the anti-ragging undertaking because the official process requires it.
+**Document slots [ASSUMPTION]:** `marksheet10`, `marksheet12`, `graduationMarksheet` (PG only), `idProof`, `photograph`, and `categoryCertificate` (required when the category is not General, as the existing form states). The SRS says only "mark sheets, ID proof, photograph"; we split marksheets by level.
 
 ### Module 4: Payment (Member C)
 | Feature | SRS | Pri |
@@ -270,15 +266,18 @@ flowchart TB
     AI["6 AI assistant"]
     NOTI["7 Notifications"]
   end
-  subgraph Data["Data layer: MongoDB (Mongoose)"]
+  subgraph Data["Primary data layer: Supabase (PostgreSQL)"]
     DB[("users, otps, sessions, courses,\napplications, payments,\nnotifications, auditlogs")]
   end
+  subgraph FileStore["File storage layer: MongoDB GridFS"]
+    GFS[("Uploaded documents\n(PDF, JPG, PNG)")]
+  end
   UI -- "HTTPS / REST" --> API
-  API -- "Mongoose" --> DB
+  API -- "Supabase JS Client" --> DB
+  DOC -- "Mongoose / GridFS" --> GFS
   PAY <--> GW["Payment gateway\n(card / net banking / UPI)"]
   NOTI --> MAIL["Email service"]
   AI <--> LLM["LLM service"]
-  DOC --> FS[("File storage")]
 ```
 
 ### Layers and responsibilities
@@ -286,9 +285,10 @@ flowchart TB
 |---|---|---|
 | **React client** | Screens, form state, client-side validation for fast feedback | Be trusted for any rule; hold secrets |
 | **Routes** (Express) | HTTP in/out, authentication, role check, input validation | Contain business rules |
-| **Services** | Business rules (submit checks, status transitions, fee calculation) | Know about HTTP |
-| **Models** (Mongoose) | Data shape, schema-level validation, indexes | Contain workflow logic |
-| **Integrations** | Payment gateway, email, LLM, file storage behind small interfaces | Leak provider details into services |
+| **Services** | Business rules (submit checks, status transitions, fee calculation, application number generation) | Know about HTTP |
+| **Data access** (Supabase) | Relational data: users, applications, courses, payments, notifications, audit logs | Contain workflow logic |
+| **File storage** (MongoDB GridFS) | Binary file storage for uploaded documents (PDF, JPG, PNG) | Store structured data |
+| **Integrations** | Payment gateway, email, LLM behind small interfaces | Leak provider details into services |
 
 **Why this separation:** the same business rule (e.g. "can this application be submitted?") is needed by the submit route, the preview screen and tests. Putting it in one service keeps behaviour consistent.
 
@@ -297,7 +297,8 @@ flowchart TB
 |---|---|---|
 | Frontend | React + Vite, React Router, Axios | Component model suits a multi-step form; fast dev server |
 | Backend | Node.js + Express | One language across the stack; small and easy for a 3-person team |
-| Database | MongoDB + Mongoose | Application data is a nested document (sections, documents, preferences) read and written together |
+| Primary database | Supabase (PostgreSQL) | Relational model for structured admission data with built-in auth helpers, row-level security, and real-time subscriptions; strong consistency for financial and application data |
+| File storage | MongoDB + GridFS | Purpose-built for storing and streaming large binary files (uploaded documents); avoids bloating the relational DB with BLOBs; each file tracked by metadata (slot, application ID, MIME type) |
 | Auth | Server-side sessions in an `httpOnly`, `SameSite=Strict` cookie | Logout must end the session immediately (`FR3`); JS cannot read the cookie (XSS safety) |
 | Validation | Zod (request) + Mongoose (storage) | Two independent lines of defence |
 | Passwords | bcrypt (salted) | NFR 4.2.3 |
@@ -315,29 +316,47 @@ iem-admission/
    ├─ .env.example
    ├─ src/
    │  ├─ app.js            security headers, CORS, JSON, cookies, routes, error handler
-   │  ├─ index.js          connects MongoDB, starts server
+   │  ├─ index.js          connects Supabase & MongoDB, starts server
    │  ├─ config.js · errors.js
+   │  ├─ db/
+   │  │  ├─ supabase.js    Supabase client initialisation
+   │  │  └─ gridfs.js      MongoDB GridFS connection and helpers
    │  ├─ middleware/errorHandler.js
-   │  └─ models/           User · Otp · Session · AuditLog · Course · Application · Payment · Notification
+   │  └─ modules/          per-module routes and services
    └─ tests/               health.test.js · models.test.js
 ```
-Planned per-module folders: `server/src/modules/<name>/{routes,service}.js` and `client/src/features/<name>/`.
 
 ---
 
 ## 8. Data model
 
-### Entities and ownership
+### Databases
+
+**Supabase (PostgreSQL)** is the primary database for all structured data: users, applications, courses, payments, notifications, audit logs, OTPs, and sessions. PostgreSQL's relational model provides referential integrity, transactional guarantees, and strong consistency for financial and admission data.
+
+**MongoDB GridFS** is used exclusively for file storage. All uploaded documents (marksheets, ID proofs, photographs, certificates) are stored as GridFS files, with metadata linking each file to its application and document slot. This avoids storing large binary data in the relational database and provides efficient streaming for uploads and downloads.
+
+### Tables (Supabase / PostgreSQL) and ownership
 | Collection | Owner | Purpose | Key points |
 |---|---|---|---|
 | **User** | A | Account and credentials | `passwordHash` hidden by default; unique email and full phone; `role` defaults to `applicant`; lockout counters; consent flag |
-| **Otp** | A | Verification and reset codes | Only a hash is stored; expiry via MongoDB TTL index; attempt counter |
-| **Session** | A | Logged-in sessions | Only a hash of the cookie token; TTL expiry; deleting the row = instant logout |
+| **Otp** | A | Verification and reset codes | Only a hash is stored; expiry managed by scheduled cleanup; attempt counter |
+| **Session** | A | Logged-in sessions | Only a hash of the cookie token; expiry timestamp; deleting the row = instant logout |
 | **AuditLog** | A | Who did what, when | Actor, action, target, detail (NFR 4.2.5) |
 | **Course** | B | Programme catalogue | Level, duration, entrance type, eligibility %, semester fees, booking amount, optional application fee, academic year |
-| **Application** | B | One per applicant | Embedded course and stream, personal, address, family, citizenship, admission test, academics (10th, 12th, degree, post graduate), other details, documents, decision; status, timestamps, reference number |
+| **Application** | B | One per applicant | References course and stream; personal, address, family, citizenship, admission test, academics (10th, 12th, degree, post graduate), other details, decision; status, timestamps, application number (auto-generated on submit) |
+| **ApplicationDocument** | B | Document metadata | Links to the GridFS file ID, document slot name, application ID, upload status, admin verification status |
 | **Payment** | C | Fee transactions | Kind (application/admission), line items, method (online/NEFT/DD), gateway reference, offline reference, status, receipt number |
 | **Notification** | C | In-app inbox | Type, message, deep link, read flag |
+
+### File storage (MongoDB GridFS)
+
+Uploaded documents are stored in MongoDB GridFS with the following metadata per file:
+- `applicationId` — links back to the Supabase application record
+- `slot` — document slot name (e.g. `marksheet10`, `idProof`, `photograph`)
+- `mimeType` — PDF/JPG/PNG
+- `uploadedAt` — timestamp
+- `fileSize` — size in bytes (max 5 MB enforced at upload)
 
 ### Relationships
 ```mermaid
@@ -349,7 +368,8 @@ erDiagram
   USER ||--o{ AUDITLOG : "acts in"
   APPLICATION }o--|| COURSE : "applies to (course + stream)"
   APPLICATION ||--o{ PAYMENT : "is paid by"
-  APPLICATION ||--o{ DOCUMENT : "embeds (one per slot)"
+  APPLICATION ||--o{ APPLICATION_DOCUMENT : "has (one per slot)"
+  APPLICATION_DOCUMENT ||--|| GRIDFS_FILE : "stored in MongoDB GridFS"
   USER ||--o{ APPLICATION : "decides (admin)"
 ```
 
@@ -375,17 +395,17 @@ Derived from the existing form (§3.1). `R` = required. Required rules marked "i
 | Degree | name, board, year, percent, institution, subjects | R if PG |
 | Post graduate | name, board, year, percent, institution, subjects | optional |
 | Other | category, bloodGroup, religion, activities (≤ 250 chars), aadhaarNo (encrypted), guardianPan (encrypted), abcId | abcId R |
-| Anti-ragging | referenceNo | R before submission |
-| Workflow | status, referenceNo, draftSavedAt, submittedAt, statusChangedAt, decision{by, at, reason} | system |
+| Workflow | status, applicationNo (auto-generated: UEM-YYYY-NNNNN), draftSavedAt, submittedAt, statusChangedAt, decision{by, at, reason} | system |
 
-### Embed vs reference (a design decision to defend)
-- **Embedded in Application:** course and stream, personal, address, family, citizenship, academics, other details, documents, decision. They are always loaded together (preview, admin view), are bounded in size (one course, a fixed set of document slots) and never queried on their own.
-- **Separate collections:** Payment (queried by status, re-checked by a background job, needs its own audit trail), Notification (an inbox listing), Session/Otp (TTL cleanup), Course (shared across many applications).
+### Storage architecture
+- **Supabase (PostgreSQL) tables:** User, Otp, Session, AuditLog, Course, Application (with related address, family, citizenship, academics, other details as normalised tables or JSONB columns), ApplicationDocument (metadata only), Payment, Notification.
+- **MongoDB GridFS:** Binary file content for all uploaded documents. The `ApplicationDocument` table in Supabase stores the GridFS `fileId` as a reference, along with slot name, upload status, and admin verification status.
+- **Why this split:** Relational data benefits from PostgreSQL's referential integrity, transactions, and query power. Large binary files benefit from GridFS's chunked streaming storage without bloating the relational database.
 
 ### Rules enforced in the schema itself
-Percentages 0–100 · name ≤ 100 · mobile exactly 10 digits · gender M/F · status in the allowed set · exactly one course and stream · documents limited to PDF/JPG/PNG, ≤ 5 MB, one per slot · payment `amount` must equal the sum of its items · offline payments require a UTR/DD reference · non-negative money.
+Percentages 0–100 · name ≤ 100 · mobile exactly 10 digits · gender M/F · status in the allowed set · exactly one course and stream · documents limited to PDF/JPG/PNG, ≤ 5 MB, one per slot (enforced at upload before writing to GridFS) · payment `amount` must equal the sum of its items · offline payments require a UTR/DD reference · non-negative money · application number is unique and auto-generated as a sequential value per academic year.
 
-**Status:** design only. No models are written yet. Unique and TTL indexes will need testing against a real MongoDB.
+**Status:** design only. No tables or schemas are created yet. Unique constraints, foreign keys, and indexes will need testing against a real Supabase instance. GridFS metadata indexes will be set up in MongoDB.
 
 ---
 
@@ -426,8 +446,8 @@ All routes are under `/api`, JSON only, errors shaped as `{ error: { code, messa
 | Tampered payment amount | amount computed on the server; items must sum to total | payment service |
 | Fake "payment success" | server confirms with the gateway (webhook plus status API); browser redirect is not trusted | payment service |
 | Card data exposure | hosted gateway checkout; we store only the gateway's transaction reference (IR-5.2) | payment |
-| Malicious uploads | allow-list of types, size cap, server-side re-check (not just file extension), files served from a non-executable location | documents |
-| Injection (NoSQL/XSS) | Zod schemas reject unexpected shapes; Mongoose casts types; no raw query strings from clients | validation |
+| Malicious uploads | allow-list of types, size cap, server-side re-check (not just file extension), files stored in MongoDB GridFS (not served from the application server's filesystem) | documents |
+| Injection (SQL/XSS) | Zod schemas reject unexpected shapes; Supabase client uses parameterised queries; no raw query strings from clients | validation |
 | Information leaks | internal errors logged, generic message to the client | errorHandler |
 | Exposure of sensitive personal data | Aadhaar and PAN encrypted at rest and masked (last 4 digits) in lists; family income, religion, blood group, passport and visa shown only on the admin detail view; never written to logs or AI prompts, and excluded from exports unless explicitly chosen | models, admin module |
 | Privacy | consent captured at registration; data limited to what the existing form collects; audit log for admin actions (NFR 4.5.x, 4.2.5) | models |
@@ -501,7 +521,7 @@ Dependencies: B needs A's login; C needs B's applications. Parallel work early o
 1. No mandatory application fee (`applicationFee` defaults to 0).
 2. Booking/admission payment happens **after** admin approval.
 3. One application per applicant.
-4. Marksheet slots are split per level, and the anti-ragging undertaking is mandatory.
+4. Marksheet slots are split per level.
 5. Eligibility percentages are advisory for the officer.
 6. Categories are `General / OBC / SC / ST / EWS`.
 7. Correction flow unlocks only flagged sections.
@@ -528,7 +548,7 @@ Dependencies: B needs A's login; C needs B's applications. Parallel work early o
 ### Documents that must be updated to match this design
 | Document | Change needed |
 |---|---|
-| SRS | FR4 (form sections per §3.1; one course and stream instead of 3 ranked preferences, FR4.4); FR5 (application fee optional; admission payment after approval); FR5.3 relaxed; add payment-by-NEFT/DD, anti-ragging document, class-12 status; clarify the correction flow; fix FR24's reference to "FR21" (should be FR19); remove FR6.3/6.4 duplication with FR9 |
+| SRS | FR4 (form sections per §3.1; one course and stream instead of 3 ranked preferences, FR4.4); FR5 (application fee optional; admission payment after approval); FR5.3 relaxed; add payment-by-NEFT/DD, class-12 status; clarify the correction flow; fix FR24's reference to "FR21" (should be FR19); remove FR6.3/6.4 duplication with FR9 |
 | Use case diagram | Add logout, forgot password, notifications, AI use cases, reports/export, "Record offline payment"; show Admin and Applicant as specialisations of User |
 | DFD | Payment Gateway, Email and AI should be **external entities** (the Level-1 diagram draws the gateway as a process); add Documents and Payments data stores |
 | Activity diagram | Move payment after approval; add the correction loop and Admission Confirmed |
@@ -553,7 +573,9 @@ Dependencies: B needs A's login; C needs B's applications. Parallel work early o
 | **DD** | Demand draft |
 | **RBAC** | Role-based access control |
 | **OTP** | One-time password |
-| **TTL index** | MongoDB index that deletes documents automatically after a time |
+| **TTL index** | MongoDB index that deletes documents automatically after a time (used in GridFS metadata cleanup) |
+| **Supabase** | Open-source Firebase alternative providing a managed PostgreSQL database, auth helpers, and real-time subscriptions |
+| **GridFS** | MongoDB specification for storing and retrieving large files (>16 MB limit) by splitting them into chunks |
 | **Webhook** | Server-to-server callback from the payment gateway confirming a payment |
 | **FR / NFR / IR** | Functional / Non-functional / Interface requirement IDs in the SRS |
 
@@ -561,8 +583,9 @@ Dependencies: B needs A's login; C needs B's applications. Parallel work early o
 
 ## 17. Likely viva questions, with short answers
 
-1. **Why MongoDB for an admission system?** The application is a nested document edited section by section and read whole; it avoids many joins. Payments and notifications are separate because they are queried independently.
-2. **Why server-side sessions rather than JWT?** `FR3` demands that logout ends the session immediately; a stateless token can't be revoked without extra machinery. A hashed token in a TTL collection is simple and revocable.
+1. **Why Supabase (PostgreSQL) as the primary database?** Admission data is inherently relational — applicants, courses, payments, and documents have clear foreign-key relationships. PostgreSQL provides referential integrity, ACID transactions for payment and status changes, and powerful query capabilities for admin reports and filtering. Supabase adds a managed PostgreSQL with built-in auth helpers and row-level security.
+2. **Why MongoDB GridFS for file storage?** Uploaded documents (PDFs, images) are large binary blobs that don't benefit from relational storage. GridFS chunks files automatically, supports streaming, and keeps the PostgreSQL database lean. Each file is linked back to the application via metadata.
+3. **Why server-side sessions rather than JWT?** `FR3` demands that logout ends the session immediately; a stateless token can't be revoked without extra machinery. A hashed token in a session table with an expiry timestamp is simple and revocable.
 3. **How do you stop a user changing the fee in the browser?** The amount is computed on the server from course data; the client never sends it.
 4. **What if the payment page closes before the user returns?** The gateway's webhook and a periodic status check confirm the result; the browser return is only a convenience.
 5. **What if the AI fails?** It is advisory and isolated; the core flow never calls it.
