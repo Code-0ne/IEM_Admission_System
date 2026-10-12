@@ -1,12 +1,12 @@
-# Implementation Plan — UEM Admission Management System
+# Implementation Plan — IEM Admission Management System
 
 > Derived from `product.md`. Approved decisions:
-> - **Payment gateway:** mock only for now (real gateway plugs into the interface later)
-> - **Email provider:** deferred (console/log stub behind a `mailer` interface)
+> - **Payment gateway:** provider remains to be confirmed; implement the SRS-required third-party gateway integration through a replaceable payment interface in the payment phase
+> - **Email provider:** provider remains to be confirmed; implement the SRS-required email integration through a replaceable `mailer` interface in the notifications phase
 > - **LLM provider:** Ollama or NVIDIA — interface designed for both; built in Phase 6
 > - **Primary database:** Supabase (PostgreSQL) for all structured data (credentials in `.env`, git-ignored)
 > - **File storage:** MongoDB GridFS exclusively for uploaded documents (credentials in `.env`, git-ignored)
-> - **Scope of this run:** Phases 0–1 only (scaffold + data layer)
+> - **Scope of this run:** Phases 0–1 only (scaffold + data layer); payment and email integrations are scheduled for later phases
 
 ---
 
@@ -45,7 +45,7 @@ File uploads stored exclusively in MongoDB GridFS.
 - Unique email, unique full phone (country code + 10 digits)
 - `password_hash` — bcrypt, never returned in queries by default
 - `role` enum `applicant|admin`, default `applicant`; never accepted from request bodies
-- Lockout counters: `failed_login_attempts`, `locked_until` (5 failures → 15 min, assumption 8)
+- Lockout counters: `failed_login_attempts`, `locked_until` (5 failures → 15 min, assumption 7)
 - Consent flag + timestamp (captured at registration, product.md §10)
 
 ### 2. Otp (Supabase table: `otps`)
@@ -56,7 +56,7 @@ File uploads stored exclusively in MongoDB GridFS.
 
 ### 3. Session (Supabase table: `sessions`)
 - Only a **hash** of the cookie token
-- Expiry timestamp (2 hours, assumption 8)
+- Expiry timestamp (2 hours, assumption 7)
 - Deleting the row = instant logout (FR3)
 
 ### 4. AuditLog (Supabase table: `audit_logs`)
@@ -67,11 +67,13 @@ File uploads stored exclusively in MongoDB GridFS.
 - eligibility % (10th / 12th / PCM / graduation — all optional)
 - semester fees (JSONB array)
 - booking amounts `{ appearing, passed }` — `null` where unpublished (6 B.Tech rows)
-- `application_fee` default 0 (assumption: no mandatory application fee)
+- course/admission fee and confirmed additional-charge configuration for the relevant academic year; do not add an application-fee field
 
-### 6. Application (Supabase table: `applications` — one per applicant, unique on `user_id`)
-All §8 groups stored as columns or JSONB:
-- course ref + stream (exactly one — [CHANGE] vs SRS 3 ranked preferences)
+### 6. Application (Supabase table: `applications`)
+All §8 groups stored as columns or JSONB.
+
+- **One application per applicant is an assumption in `product.md`, not an explicit SRS requirement.** Add a unique constraint on `user_id` only if the faculty confirms this rule; otherwise allow multiple applications per user.
+- course ref + stream (exactly one course and one stream, as required by SRS FR4.2)
 - candidate: full_name (≤100, in full), gender (M/F), dob, email, mobile (10 digits)
 - address: present (R) + permanent (R unless `same_as_present`) — JSONB
 - family: father / mother / guardian (name R for all; guardian office address + monthly income R) — JSONB
@@ -81,11 +83,12 @@ All §8 groups stored as columns or JSONB:
   12th subject marks (hidden for BBA/MBA), degree block (R for PG), post-graduate block (optional) — JSONB
 - other details: category (`General|OBC|SC|ST|EWS`), blood_group, religion, activities (≤250),
   **aadhaar_no / guardian_pan — encrypted at rest, masked (last 4) in read operations**, `abc_id` (R)
-- workflow: status enum incl. `Draft` and `AdmissionConfirmed` [ASSUMPTION],
+- workflow: status enum including `Draft`, `Submitted`, `Under Review`, `Correction Requested`, `Approved`, `Rejected`, and `Admission Confirmed` (SRS FR12; use consistent machine-readable enum values in the database),
   `application_no` (unique, auto-generated on submit as `UEM-YYYY-NNNNN` using PostgreSQL sequence),
   `draft_saved_at`, `submitted_at`, `status_changed_at`,
   `decision { by, at, reason }` (reason mandatory on reject)
 - `flagged_sections` JSONB array for correction flow
+- alternative-course offer workflow (FR6.6): record the offer and applicant consent before updating the selected course; notify the applicant after the change
 - Schema-level: percentages 0–100, name ≤100, mobile 10 digits, gender enum, status enum (all via CHECK constraints)
 
 ### 6a. ApplicationDocument (Supabase table: `application_documents`)
@@ -102,10 +105,10 @@ All §8 groups stored as columns or JSONB:
 - Files streamed to/from GridFS; never held in memory or stored on the local filesystem
 
 ### 7. Payment (Supabase table: `payments`)
-- application ref, `kind` enum (application/admission)
+- application ref, `kind` enum (`course/admission fee`)
 - line items; `amount === sum(items)` validator
 - `method`: `online | NEFT | DD`; offline **requires** UTR/DD reference
-- gateway transaction reference only — no card data (IR-5.2)
+- gateway transaction reference only — no raw card data (IR-2, especially subrequirement 5.2.4)
 - status enum, `receiptNo`, non-negative money
 
 ### 8. Notification (Supabase table: `notifications`)
@@ -115,7 +118,7 @@ All §8 groups stored as columns or JSONB:
 
 - `server/tests/models.test.js` (`node --test`): percentage bounds, name/mobile/gender/status
   enums, document slot type/size limits, amount==sum(items), offline-reference requirement,
-  unique constraint behaviour. Connects to Supabase (dev/test project) and MongoDB (for GridFS)
+  applicable uniqueness constraints. Connects to Supabase (dev/test project) and MongoDB (for GridFS)
   when credentials are set in `.env`; skips cleanly with a clear message if unset.
 - `server/tests/health.test.js` (Supertest): `GET /api/health` → 200; error shape
   `{ error: { code, message, details } }`.
@@ -132,10 +135,10 @@ All §8 groups stored as columns or JSONB:
 | Phase | Content | Owner | product.md step |
 |---|---|---|---|
 | 2 | Auth backend + UI (register, OTP, login/lockout, logout, forgot/reset, RBAC, seed scripts) — Supabase for user/session/otp tables | A | 4–5 |
-| 3 | Applications + documents (form steps, drafts, preview, submit/lock with application number generation, uploads to GridFS, correction flow) | B | 6 |
-| 4 | Payments (mock gateway, webhook + status re-check, receipts, offline NEFT/DD) + notifications (log mailer) — Supabase for payments/notifications tables | C | 7 |
+| 3 | Applications + documents (form steps, drafts, preview, submit/lock with application number generation, uploads to GridFS, correction flow, and FR6.6 alternative-course offers with recorded applicant consent and notification) | B | 6 |
+| 4 | Third-party payment gateway integration (initiation, webhook/callback and server-side status re-check), receipts, offline NEFT/DD recording, and email/in-app notifications through provider-independent interfaces — Supabase for payments/notifications tables | C | 7 |
 | 5 | Admin review (consolidated view, filters, verify/flag, decisions, dashboard, CSV/PDF export) | A | 8 |
-| 6 | AI assistant behind feature flag (chat, recommender, doc pre-check, status explainer, admin insights) via Ollama/NVIDIA interface | C | 9 |
+| 6 | AI assistant behind feature flag (chat, doc pre-check, status explainer, admin insights) via Ollama/NVIDIA interface | C | 9 |
 | 7 | Hardening: FR-traceable tests, security pass, UAT, accessibility, docs | all | 10 |
 
 ## Open questions carried from product.md §15 (won't block Phases 0–1)
@@ -145,5 +148,4 @@ All §8 groups stored as columns or JSONB:
 - Unseen middle of the existing form + dropdown option lists
 - Degree block mandatory for UG? (asterisk in screenshot)
 - Aadhaar/PAN collection — legal/faculty confirmation 
-- Application fee existence (conflicting third-party claims)
 - Portal replaces vs sits in front of the existing form

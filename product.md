@@ -1,4 +1,4 @@
-# UEM Admission Management System: Product Document
+# IEM Admission Management System: Product Document
 
 > **Institute of Engineering & Management, Kolkata (IEM–UEM Group)**
 > Software Engineering Lab project, Team 7 "Adminatrix"
@@ -10,7 +10,7 @@
 
 ## 1. What the product is
 
-The UEM Admission Management System is a web portal that takes a prospective student from **creating an account** to **a confirmed seat**, and gives the admission office a single place to **review, verify, decide and report** on applications.
+The IEM Admission Management System is a web portal that takes a prospective student from **creating an account** to **a confirmed seat**, and gives the admission office a single place to **review, verify, decide and report** on applications.
 
 It replaces a process that today is split across a public information page (`iem.edu.in/admissions`), an external ERP form (`iemcrp.com`), offline paperwork and manual payment checking, with one portal that has a clear status at every step.
 
@@ -21,7 +21,7 @@ It replaces a process that today is split across a public information page (`iem
 | Information is on one site, the form on another, payment instructions in a table | Applicants don't know where they are in the process | One portal, a guided multi-section form, a live status tracker |
 | Documents are verified, then fees paid, then paperwork submitted offline | Staff chase applicants by phone; no visibility | Upload once, verify online, flag specific documents with comments |
 | Payments come by NEFT, DD, net banking, cards, GPay/PhonePe | Staff must match bank entries to applicants by hand | Online gateway for instant confirmation; admin-recorded UTR/DD for offline payments |
-| Eligibility differs per course (10th/12th/PCM/graduation %) and is only a table | Ineligible applicants apply; officers re-check manually | Eligibility rules stored per course; AI course recommender; officer sees the numbers beside the rules |
+| Eligibility differs per course (10th/12th/PCM/graduation %) and is only a table | Ineligible applicants apply; officers re-check manually | Eligibility rules stored per course; the officer sees the applicant’s marks beside the rules |
 ### Goals
 1. Let an applicant finish an application without visiting the campus until final document submission.
 2. Give the admin team a verified, searchable, auditable record of every application.
@@ -41,7 +41,7 @@ It replaces a process that today is split across a public information page (`iem
 |---|---|---|---|
 | **Applicant** | Prospective UG/PG student (or parent filling on their behalf) | Register, verify, fill/save/edit the form, upload documents, submit, pay, track status, read notifications, use the AI assistant | See anyone else's application; touch an application after submission (unless a correction is requested) |
 | **Admin** | Admission officer | Search/filter applications, open the consolidated view, verify/flag documents, request corrections, approve/reject (reason required for reject), record offline payments, view dashboard and exports | Self-register (admins are created by a seed script only); change applicant-entered data |
-| **AI Assistant** | A feature, not a login role | Answer questions, recommend courses, pre-check documents, explain status, summarise trends for admin | Change data, decide outcomes, or block submission |
+| **AI Assistant** | A feature, not a login role | Answer questions, pre-check documents, explain status, summarise trends for admin | Change data, decide outcomes, or block submission |
 
 Access control is **deny by default**: every protected route checks the session and then the role.
 
@@ -112,28 +112,30 @@ Source: screenshots of the live form, "Admission Form for the Session 2026-27", 
 ```
 Register → Verify OTP → Log in → Fill form (draft any time) → Upload documents
    → Preview → Submit (locks, application number issued) → [Admin review]
-   → Approved → Pay booking amount (+ fixed charges) → Admission Confirmed
+   → Approved → View applicable course/admission fee and confirmed additional charges
+   → Pay course/admission fee → Payment confirmed → Admission Confirmed
 ```
 
 1. **Register** (`FR2`): name, email, country code + 10-digit mobile, password, consent. Account is *unverified* until the OTP sent by email is entered (10-minute expiry, resend allowed).
 2. **Log in** (`FR3`): by email or mobile + password. Five consecutive failures lock the account temporarily.
 3. **Fill the form** (`FR4`), modelled on the existing IEM form (§3.1), in steps: Course & personal → Address → Family → Citizenship (only if "foreign student" is Yes) → Admission test & academics → Other details → Documents → Review & Submit. Sections that don't apply to the chosen course are hidden (§6). Fields validate as the user types; incomplete sections cannot be passed.
 4. **Save draft / resume** (`FR7`) and **edit any section** before submitting (`FR8`).
-5. **Upload documents** (`FR9`) into labelled slots. PDF/JPG/PNG, max 5 MB each, immediate format/size check with a specific reason on failure, progress bar, confirmation per file. An optional AI quality check may suggest re-uploading a blurry scan (`FR22`).
+5. **Upload documents** (`FR9`) into labelled slots. PDF/JPG/PNG, max 5 MB each, immediate format/size check with a specific reason on failure, progress bar, confirmation per file. An optional AI quality check may suggest re-uploading a blurry scan (`FR21`).
 6. **Preview** (`FR10`): read-only summary in form order with "jump back" links.
 7. **Submit** (`FR11`): enabled only when mandatory fields and documents pass. On submit the system assigns a **unique application number** (format: `UEM-<YEAR>-<SEQ>`, e.g. `UEM-2026-00001`), locks the application, timestamps it, sets status **Submitted**. The application number is displayed to the applicant immediately and included in the confirmation email.
 8. **Track status** (`FR12`) on the dashboard; the status updates without re-login. **Notifications** (`FR13`) arrive in-app and by email.
-9. **After approval:** pay the admission/booking amount online (or by NEFT/DD, which an admin records); a **receipt PDF** (`FR16`) becomes available; status becomes **Admission Confirmed**.
+9. **After approval:** view the applicable course/admission fee and confirmed additional charges, then pay the required amount online or by NEFT/DD (which an admin records). A **receipt PDF** (`FR16`) becomes available after successful payment confirmation; status becomes **Admission Confirmed** only after the required course/admission fee is confirmed (`FR5.1`, `FR12`, `FR15`).
 10. **Forgot password** (`FR14`): email OTP valid for 15 minutes.
 
 ### 4.2 Admin journey
 1. Log in with an admin account (created by seed script).
 2. **Search/filter** the application list by course, status, submission date range, payment status, with pagination (`FR17`).
-3. **Open the consolidated view** (`FR6`): all personal, academic and preference data beside the uploaded documents.
+3. **Open the consolidated view** (`FR6`): applicant details, academic details, the selected course and stream, payment status, and uploaded-document metadata beside the uploaded documents.
 4. **Verify or flag each document** with an optional comment (`FR6.2`). **Request a correction** if something is wrong.
 5. **Approve or reject** (`FR18`). A reason is mandatory for rejection. The system records who decided and when, and notifies the applicant.
 6. **Record offline payments** (NEFT/DD reference) so they reconcile with the applicant's record.
-7. **Dashboard and reports** (`FR19`): totals, by status, by course, payment completion rate; export CSV/PDF for a date range. AI trend insights appear in a separate panel (`FR24`).
+7. **Dashboard and reports** (`FR19`): totals, by status, by course, and payment completion rate; export CSV/PDF for a date range. AI trend and anomaly insights appear in a separate panel (`FR23`).
+8. **Alternative-course offer** (`FR6.6`): when an applicant is ineligible for the selected course but eligible for another, an authorised admin may offer an alternative subject to institutional policy. Record the applicant’s consent before updating the selected course, then notify the applicant.
 
 ### 4.3 Application status lifecycle
 
@@ -146,12 +148,12 @@ stateDiagram-v2
     CorrectionRequested --> Submitted: Applicant fixes flagged items and resubmits
     UnderReview --> Approved: Admin approves
     UnderReview --> Rejected: Admin rejects (reason required)
-    Approved --> AdmissionConfirmed: Booking amount paid
+    Approved --> AdmissionConfirmed: Required course/admission fee confirmed
     Rejected --> [*]
     AdmissionConfirmed --> [*]
 ```
 
-- The SRS lists five applicant-visible statuses (Submitted, Under Review, Correction Requested, Approved, Rejected). **[ASSUMPTION]** We add `Draft` (before submission) and `Admission Confirmed` (after booking payment) because the official process has a payment step after verification.
+- The SRS FR12 includes `Draft`, `Submitted`, `Under Review`, `Correction Requested`, `Approved`, `Rejected`, and `Admission Confirmed`. `Admission Confirmed` follows approval and successful confirmation of the required course/admission fee.
 - **Correction flow [ASSUMPTION]:** the SRS locks an application on submit (`FR11`) but also defines *Correction Requested* (`FR12`) without saying how editing is re-enabled. Our design: only the flagged sections unlock; everything else stays locked; resubmitting returns the application to *Submitted*.
 
 ---
@@ -174,7 +176,7 @@ The system has seven modules (from the High-Level Design). Priority: **H**igh / 
 | Feature | SRS | Pri |
 |---|---|---|
 | Multi-section application form with inline validation | FR4 | M |
-| Course and stream selection (one course, one stream) **[CHANGE]** | FR4.4 | M |
+| Course and stream selection (exactly one course and one stream) | FR4.2 | M |
 | Conditional sections by course level and citizenship **[ASSUMPTION]** | FR4 | M |
 | Draft save with timestamp, auto-resume | FR7 | M |
 | Edit before submission | FR8 | M |
@@ -186,7 +188,7 @@ The system has seven modules (from the High-Level Design). Priority: **H**igh / 
 | Feature | SRS | Pri |
 |---|---|---|
 | Labelled upload slots, 5 MB, PDF/JPG/PNG, progress and confirmation | FR9 | H |
-| Instant format/size validation with specific reasons | FR6.3, 6.4 | H |
+| Instant format/size validation with specific reasons | FR9.2, FR9.3 | H |
 | Admin verify/flag with comment | FR6.2 | H |
 
 **Document slots [ASSUMPTION]:** `marksheet10`, `marksheet12`, `graduationMarksheet` (PG only), `idProof`, `photograph`, and `categoryCertificate` (required when the category is not General, as the existing form states). The SRS says only "mark sheets, ID proof, photograph"; we split marksheets by level.
@@ -195,7 +197,7 @@ The system has seven modules (from the High-Level Design). Priority: **H**igh / 
 | Feature | SRS | Pri |
 |---|---|---|
 | Fee display per selected course | FR5.1 | H |
-| Hosted gateway checkout (card, net banking, UPI) | FR5.2, IR-5.2 | H |
+| Hosted gateway checkout (card, net banking, UPI) | FR5.2, IR-2 (subrequirements 5.2.1–5.2.4) | H |
 | Server-side payment status verification and re-check of pending payments | FR15 | H |
 | Receipt with transaction ID, amount, date/time, applicant, PDF download | FR16 | M |
 | Offline payments (NEFT/DD) recorded by an admin | from official page | n/a |
@@ -209,15 +211,14 @@ The system has seven modules (from the High-Level Design). Priority: **H**igh / 
 | Dashboard, charts, CSV/PDF export | FR19 | M |
 
 ### Module 6: AI assistant (Member C)
-All AI output is **labelled as AI-generated, advisory only, and fails safe**: if the AI service is down or slow, the core admission flow continues unaffected (IR-5.6.2, NFR-8).
+All AI output is **labelled as AI-generated, advisory only, and fails safe**: if the AI service is down or slow, the core admission flow continues unaffected (IR-6, NFR-8).
 
 | Feature | SRS | Pri |
 |---|---|---|
 | Admission chatbox with session memory, available on every applicant page | FR20 | M |
-| Course recommender: up to 3 programmes with justification; never changes the applicant's preferences | FR21 | L |
-| Document quality pre-check (blur, lighting, cropped, missing pages); advisory only, never blocks submission | FR22 | M |
-| Status explainer in plain language, with the next step | FR23 | L |
-| Admin trend and anomaly insights (in-demand courses, reasons for incomplete applications, rejection spikes) | FR24 | L |
+| Document quality pre-check (blur, lighting, cropped, missing pages); advisory only, never blocks submission | FR21 | M |
+| Status explainer in plain language, with the next step | FR22 | L |
+| Admin trend and anomaly insights (in-demand courses, reasons for incomplete applications, rejection spikes) | FR23 | L |
 
 ### Module 7: Notifications (Member C)
 | Feature | SRS | Pri |
@@ -229,8 +230,8 @@ All AI output is **labelled as AI-generated, advisory only, and fails safe**: if
 ## 6. Business rules
 
 1. **One application per applicant** **[ASSUMPTION]**.
-2. **Name** ≤ 100 characters (`FR4.2`). **Mobile** = country code + exactly 10 digits. **Gender** M/F. **Marks/percentages** 0–100 (`FR4.6`).
-3. **One course and one stream per application** **[CHANGE]**. The existing form takes one; the SRS currently allows 3 ranked preferences (`FR4.4`).
+2. **Name** ≤ 100 characters (`FR4.3`). **Mobile** = country code + exactly 10 digits. **Gender** M/F. **Marks/percentages** 0–100 (`FR4.11`).
+3. **One course and one stream per application** (`FR4.2`). The applicant selects exactly one course and one stream; alternative-course changes follow the consent workflow in `FR6.6`.
 4. **Submit is enabled only if** every mandatory field is complete and every mandatory document has passed validation (`FR11`).
 5. **After submit** the applicant cannot edit, except flagged sections during *Correction Requested*.
 6. **Rejection always has a reason**; every decision records the deciding admin and timestamp (`FR18`).
@@ -238,8 +239,7 @@ All AI output is **labelled as AI-generated, advisory only, and fails safe**: if
 8. **Booking amount** depends on class-12 status (*Appearing* vs *Passed*) where the course publishes one.
 9. **Payment amounts are computed on the server** from course data. The browser never sends an amount we trust.
 10. **A payment is only "Success" after the server confirms it** with the gateway (webhook plus a status-API check). A browser redirect alone is never enough (`FR15`).
-11. **Application fee [ASSUMPTION]:** the official page shows none, so `applicationFee` defaults to ₹0 and, when 0, the payment gate before submission is skipped. If the admissions office confirms a fee, it is configured per course and `FR5.3` applies (waivers supported).
-12. **Payment timing [ASSUMPTION]:** the booking/admission payment happens **after** admin approval, matching the official order (verify, then pay).
+11. **Payment timing:** the applicable course/admission fee and confirmed additional charges are displayed after administrator approval (`FR5.1`). Admission is confirmed only after the required course/admission fee is successfully confirmed (`FR12`, `FR15`).
 13. **Names are entered in full**, with no initials or titles (Mr, Ms…), as the existing form requires. Same rule for father, mother and guardian names.
 14. **Mandatory fields follow the existing form's asterisks** (§3.1). The existing "enter 0 if result not declared" convention is replaced by an empty value plus `class12Status = Appearing` **[ASSUMPTION]**, because a stored 0 would look like a real mark.
 15. **Conditional sections [ASSUMPTION]:** citizenship details only when "foreign student" = Yes; 12th subject marks hidden for BBA and MBA; degree block shown for PG programmes; post-graduate block always optional.
@@ -267,7 +267,7 @@ flowchart TB
     NOTI["7 Notifications"]
   end
   subgraph Data["Primary data layer: Supabase (PostgreSQL)"]
-    DB[("users, otps, sessions, courses,\napplications, payments,\nnotifications, auditlogs")]
+    DB[("users, otps, sessions, courses,\napplications, application_documents,\npayments, notifications, auditlogs")]
   end
   subgraph FileStore["File storage layer: MongoDB GridFS"]
     GFS[("Uploaded documents\n(PDF, JPG, PNG)")]
@@ -300,7 +300,7 @@ flowchart TB
 | Primary database | Supabase (PostgreSQL) | Relational model for structured admission data with built-in auth helpers, row-level security, and real-time subscriptions; strong consistency for financial and application data |
 | File storage | MongoDB + GridFS | Purpose-built for storing and streaming large binary files (uploaded documents); avoids bloating the relational DB with BLOBs; each file tracked by metadata (slot, application ID, MIME type) |
 | Auth | Server-side sessions in an `httpOnly`, `SameSite=Strict` cookie | Logout must end the session immediately (`FR3`); JS cannot read the cookie (XSS safety) |
-| Validation | Zod (request) + Mongoose (storage) | Two independent lines of defence |
+| Validation | Zod (request) + Supabase/PostgreSQL constraints (storage) | Two independent lines of defence |
 | Passwords | bcrypt (salted) | NFR 4.2.3 |
 | Tests | Node's built-in test runner + Supertest | No extra framework to learn |
 | Dev proxy | Vite proxies `/api` to Express | Browser sees one origin, simpler cookies |
@@ -332,7 +332,7 @@ iem-admission/
 
 ### Databases
 
-**Supabase (PostgreSQL)** is the primary database for all structured data: users, applications, courses, payments, notifications, audit logs, OTPs, and sessions. PostgreSQL's relational model provides referential integrity, transactional guarantees, and strong consistency for financial and admission data.
+**Supabase (PostgreSQL)** is the primary database for all structured data: users, applications, application documents, courses, payments, notifications, audit logs, OTPs, and sessions. PostgreSQL's relational model provides referential integrity, transactional guarantees, and strong consistency for financial and admission data.
 
 **MongoDB GridFS** is used exclusively for file storage. All uploaded documents (marksheets, ID proofs, photographs, certificates) are stored as GridFS files, with metadata linking each file to its application and document slot. This avoids storing large binary data in the relational database and provides efficient streaming for uploads and downloads.
 
@@ -343,10 +343,10 @@ iem-admission/
 | **Otp** | A | Verification and reset codes | Only a hash is stored; expiry managed by scheduled cleanup; attempt counter |
 | **Session** | A | Logged-in sessions | Only a hash of the cookie token; expiry timestamp; deleting the row = instant logout |
 | **AuditLog** | A | Who did what, when | Actor, action, target, detail (NFR 4.2.5) |
-| **Course** | B | Programme catalogue | Level, duration, entrance type, eligibility %, semester fees, booking amount, optional application fee, academic year |
+| **Course** | B | Programme catalogue | Level, duration, entrance type, eligibility %, semester fees, booking amount where published, academic year |
 | **Application** | B | One per applicant | References course and stream; personal, address, family, citizenship, admission test, academics (10th, 12th, degree, post graduate), other details, decision; status, timestamps, application number (auto-generated on submit) |
 | **ApplicationDocument** | B | Document metadata | Links to the GridFS file ID, document slot name, application ID, upload status, admin verification status |
-| **Payment** | C | Fee transactions | Kind (application/admission), line items, method (online/NEFT/DD), gateway reference, offline reference, status, receipt number |
+| **Payment** | C | Fee transactions | Kind (course/admission fee), line items, method (online/NEFT/DD), gateway reference, offline reference, status, receipt number |
 | **Notification** | C | In-app inbox | Type, message, deep link, read flag |
 
 ### File storage (MongoDB GridFS)
@@ -418,7 +418,7 @@ All routes are under `/api`, JSON only, errors shaped as `{ error: { code, messa
 | Auth | `POST /auth/register`, `/verify-otp`, `/resend-otp` | public | FR2 |
 | | `POST /auth/login`, `/logout` · `GET /auth/me` | public / any | FR3 |
 | | `POST /auth/forgot-password`, `/reset-password` | public | FR14 |
-| Courses | `GET /courses` | any | FR4.4, FR5.1 |
+| Courses | `GET /courses` | any | FR4.2, FR5.1 |
 | Application | `GET/PUT /applications/me` (draft save) | applicant | FR4, 7, 8 |
 | | `GET /applications/me/preview` · `POST /applications/me/submit` | applicant | FR10, 11 |
 | Documents | `POST /applications/me/documents/:slot` · `DELETE …/:slot` | applicant | FR9 |
@@ -429,7 +429,7 @@ All routes are under `/api`, JSON only, errors shaped as `{ error: { code, messa
 | | `POST /admin/applications/:id/decision` · `/request-correction` | admin | FR18 |
 | | `POST /admin/payments/:id/record-offline` | admin | official page |
 | | `GET /admin/dashboard` · `GET /admin/export?format=csv|pdf` | admin | FR19 |
-| AI | `POST /ai/chat` · `/ai/recommend-courses` · `/ai/check-document` · `GET /ai/status-explanation` · `GET /admin/ai/insights` | applicant / admin | FR20–24 |
+| AI | `POST /ai/chat` · `/ai/check-document` · `GET /ai/status-explanation` · `GET /admin/ai/insights` | applicant / admin | FR20–FR23 |
 
 ---
 
@@ -445,7 +445,7 @@ All routes are under `/api`, JSON only, errors shaped as `{ error: { code, messa
 | Privilege escalation | role checked server-side on every protected route; admins only via seed script; `role` never accepted from request bodies | middleware |
 | Tampered payment amount | amount computed on the server; items must sum to total | payment service |
 | Fake "payment success" | server confirms with the gateway (webhook plus status API); browser redirect is not trusted | payment service |
-| Card data exposure | hosted gateway checkout; we store only the gateway's transaction reference (IR-5.2) | payment |
+| Card data exposure | hosted gateway checkout; we store only the gateway's transaction reference (IR-2, especially 5.2.4) | payment |
 | Malicious uploads | allow-list of types, size cap, server-side re-check (not just file extension), files stored in MongoDB GridFS (not served from the application server's filesystem) | documents |
 | Injection (SQL/XSS) | Zod schemas reject unexpected shapes; Supabase client uses parameterised queries; no raw query strings from clients | validation |
 | Information leaks | internal errors logged, generic message to the client | errorHandler |
@@ -458,8 +458,8 @@ All routes are under `/api`, JSON only, errors shaped as `{ error: { code, messa
 
 - **Advisory only.** Nothing the AI says changes data, decides an outcome or blocks a step.
 - **Always labelled** "AI-generated guidance".
-- **Fail-safe.** Timeouts and errors return a friendly "assistant unavailable" message; the form, upload and payment flows never depend on AI (IR-5.6.2).
-- **Minimum data.** Prompts include only what the feature needs (e.g. marks and subjects for recommendations), never passwords, tokens or payment details.
+- **Fail-safe.** Timeouts and errors return a friendly "assistant unavailable" message; the form, upload and payment flows never depend on AI (IR-6, NFR-8).
+- **Minimum data.** Prompts include only the data needed for the supported feature, never passwords, tokens or payment details.
 - **Grounded answers.** The chatbox is given the admission facts the institute publishes (criteria, steps, fees, dates) so it does not invent policy; when unsure it says so and points to the helpline.
 - **Session memory only.** Chat context lives for the current session (`FR20`).
 - **Provider** is an open decision (see §15); it sits behind one interface so it can be swapped.
@@ -486,9 +486,9 @@ Every FR gets at least one test case ID traceable in the final report. We will *
 |---|---|---|
 | **A** | Auth & access; Admin review | FR2, 3, 6, 14, 17–19 |
 | **B** | Application management; Documents; Courses | FR4, 7–12, 9 |
-| **C** | Payment; Notifications; AI assistant | FR5, 13, 15, 16, 20–24 |
+| **C** | Payment; Notifications; AI assistant | FR5, 13, 15, 16, 20–23 |
 
-Dependencies: B needs A's login; C needs B's applications. Parallel work early on: A builds auth; B builds the form UI against a temporary fake user; C builds the mailer and a payment mock.
+Dependencies: B needs A's login; C needs B's applications. Parallel work early on: A builds auth; B builds the form UI against a temporary fake user; C prepares the mailer and payment integration scaffolding.
 
 **Git:** `main` is always working; `dev` integrates; work happens on `feature/<module>-<what>` branches merged by reviewed pull request.
 
@@ -501,8 +501,8 @@ Dependencies: B needs A's login; C needs B's applications. Parallel work early o
 | Step | Content | Status |
 |---|---|---|
 | 1 | Finalise requirements: update the SRS, diagrams and wireframes to match this document (§15) | not started |
-| 2 | MERN skeleton (Express app, error handling, React client, dev proxy) | not started |
-| 3 | Database schema: 8 collections, including the expanded application form (§8) | not started |
+| 2 | Backend + client skeleton (Express app, error handling, React client, dev proxy) | not started |
+| 3 | Database schema: 9 tables, including the expanded application form (§8) | not started |
 | 4 | Auth backend (A) | not started |
 | 5 | Auth UI: landing, register, OTP, login (A) | not started |
 | 6 | Courses seed, application form, drafts, documents (B) | not started |
@@ -518,20 +518,18 @@ Dependencies: B needs A's login; C needs B's applications. Parallel work early o
 ## 15. Assumptions and open questions
 
 ### Assumptions we made (please confirm or correct)
-1. No mandatory application fee (`applicationFee` defaults to 0).
-2. Booking/admission payment happens **after** admin approval.
-3. One application per applicant.
-4. Marksheet slots are split per level.
-5. Eligibility percentages are advisory for the officer.
-6. Categories are `General / OBC / SC / ST / EWS`.
-7. Correction flow unlocks only flagged sections.
-8. Sessions last 2 hours; lockout is 15 minutes.
-9. MBA aptitude and GD/PI are out of scope.
-10. One course and one stream replace the 3 ranked preferences.
-11. Conditional sections (foreign student, BBA/MBA, UG vs PG) as in §6.
-12. A `categoryCertificate` document is required for non-General categories.
-13. "0 if not declared" is replaced by an empty value plus `class12Status`.
-14. The degree block is required for PG programmes only.
+1. Booking/admission payment happens **after** administrator approval.
+2. One application per applicant.
+3. Marksheet slots are split per level.
+4. Eligibility percentages are advisory for the officer.
+5. Categories are `General / OBC / SC / ST / EWS`.
+6. Correction flow unlocks only flagged sections.
+7. Sessions last 2 hours; lockout is 15 minutes.
+8. MBA aptitude and GD/PI are out of scope.
+9. Conditional sections (foreign student, BBA/MBA, UG vs PG) as in §6.
+10. A `categoryCertificate` document is required for non-General categories.
+11. "0 if not declared" is replaced by an empty value plus `class12Status`.
+12. The degree block is required for PG programmes only.
 
 ### Open questions
 - **Real application form fields.** The ERP form at `iemcrp.com` blocked our automated fetch, so the exact fields are unknown. Someone should send a screenshot or field list so the form matches.
@@ -542,13 +540,12 @@ Dependencies: B needs A's login; C needs B's applications. Parallel work early o
 - **Unseen parts of the existing form:** anything between "Post Graduate" and "Communication", and the options of every dropdown (course, stream, gender, category, admission test, board, school address, religion, blood group).
 - Is the degree block mandatory for UG applicants? (It carries an asterisk in the screenshot.)
 - May we collect **Aadhaar and PAN** at all? Check with the faculty and the institute; this is a legal and privacy question, not just a form field.
-- Does the existing form charge a fee at its final step? (Third-party sites disagree: ₹500, ₹5,000 and a ₹10,000 seat-booking fee are all claimed. None is on the official page.)
 - Scope: does our portal **replace** the existing form or **sit in front of it**? Confirm with the faculty.
 
 ### Documents that must be updated to match this design
 | Document | Change needed |
 |---|---|
-| SRS | FR4 (form sections per §3.1; one course and stream instead of 3 ranked preferences, FR4.4); FR5 (application fee optional; admission payment after approval); FR5.3 relaxed; add payment-by-NEFT/DD, class-12 status; clarify the correction flow; fix FR24's reference to "FR21" (should be FR19); remove FR6.3/6.4 duplication with FR9 |
+| SRS | The current SRS is the requirements source of truth. This product document should follow FR4.2 (one course and stream), FR5 (course/admission fee after approval), FR6.6 (alternative-course offer with recorded consent), FR9.2–FR9.3 (upload validation), and FR20–FR23 (AI features). Do not reintroduce an application fee or three ranked preferences. |
 | Use case diagram | Add logout, forgot password, notifications, AI use cases, reports/export, "Record offline payment"; show Admin and Applicant as specialisations of User |
 | DFD | Payment Gateway, Email and AI should be **external entities** (the Level-1 diagram draws the gateway as a process); add Documents and Payments data stores |
 | Activity diagram | Move payment after approval; add the correction loop and Admission Confirmed |
@@ -591,6 +588,6 @@ Dependencies: B needs A's login; C needs B's applications. Parallel work early o
 5. **What if the AI fails?** It is advisory and isolated; the core flow never calls it.
 6. **How do you prevent account enumeration?** Identical login errors and a neutral forgot-password response.
 7. **Why a `Draft` and an `Admission Confirmed` status the SRS doesn't list?** Draft is needed to resume a form (`FR7`); *Admission Confirmed* reflects the official payment step. Both are documented as assumptions.
-8. **How did you derive requirements from the real process?** We studied the published admissions page, found there is no application fee but a booking amount after verification, and updated the model and flow accordingly.
+8. **How did you derive requirements from the real process?** We studied the published admissions page, which lists admission-stage payment information but does not list a separate application fee, and modelled the system’s course/admission payment after administrator approval.
 9. **Why does the form have so many fields?** We modelled it on the institute's existing admission form (§3.1) so our system captures what the admission office already collects. Sensitive fields (Aadhaar, PAN) are encrypted and masked.
 10. **What does your system do that the existing form doesn't?** Accounts and OTP, drafts, document upload and verification, online payment, status tracking, notifications, admin review and reports, and advisory AI help.
