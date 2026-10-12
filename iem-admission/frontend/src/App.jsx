@@ -1,5 +1,13 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import {
+  AuthProvider,
+  useAuth,
+  RegistrationForm,
+  LoginForm,
+  OtpModal,
+  ForgotPassword,
+} from './features/auth/index.js';
+import {
   ArrowLeft,
   ArrowRight,
   Bell,
@@ -2266,16 +2274,25 @@ function AiChatbox({ open, onOpen, onClose }) {
   );
 }
 
-export default function App() {
+function AppContent() {
+  const auth = useAuth();
   const [page, setPage] = useState('home');
   const [user, setUser] = usePersistentState('iem-user', null);
+  const [lastOtpCode, setLastOtpCode] = useState('');
   const userScope = `:${user?.email || user?.mobile || 'guest'}`;
   const [application, setApplication] = usePersistentState(`iem-application${userScope}`, {});
   const [notifications, setNotifications] = usePersistentState(`iem-notifications${userScope}`, []);
   const [aiOpen, setAiOpen] = useState(false);
 
+  useEffect(() => {
+    if (auth.user) {
+      setUser(auth.user);
+    }
+  }, [auth.user]);
+
   const go = (next) => {
     if (next === 'logout') {
+      auth.logout();
       setUser(null);
       setPage('home');
       window.scrollTo({ top: 0, behavior: 'smooth' });
@@ -2330,15 +2347,71 @@ export default function App() {
   if (page === 'process') return <ProcessPage onNavigate={go} />;
   if (page === 'faqs') return <FaqsPage onNavigate={go} />;
   if (page === 'contact') return <ContactPage onNavigate={go} />;
-  if (page === 'register') return <RegistrationPage onNavigate={go} onRegistered={register} />;
-  if (page === 'login') return <LoginPage onNavigate={go} onLogin={login} />;
-  if (page === 'verify') return <OtpPage onNavigate={go} onVerified={verify} mobile={user?.mobile} />;
-  if (page === 'forgot') return <ForgotPasswordPage onNavigate={go} />;
+  if (page === 'register') {
+    return (
+      <div className="auth-page">
+        <PublicHeader onNavigate={go} />
+        <main>
+          <RegistrationForm
+            onNavigate={go}
+            onRegistered={(account) => {
+              register(account.user || account);
+              if (account.otpCode) setLastOtpCode(account.otpCode);
+            }}
+          />
+        </main>
+        <Footer />
+      </div>
+    );
+  }
+  if (page === 'login') {
+    return (
+      <div className="auth-page">
+        <PublicHeader onNavigate={go} />
+        <main>
+          <LoginForm onNavigate={go} onLogin={login} />
+        </main>
+        <Footer />
+      </div>
+    );
+  }
+  if (page === 'verify') {
+    return (
+      <div className="auth-page">
+        <PublicHeader onNavigate={go} />
+        <OtpModal
+          email={user?.email}
+          mobile={user?.mobile}
+          initialCode={lastOtpCode}
+          onNavigate={go}
+          onVerified={verify}
+        />
+        <Footer />
+      </div>
+    );
+  }
+  if (page === 'forgot') {
+    return (
+      <div className="auth-page">
+        <PublicHeader onNavigate={go} />
+        <ForgotPassword onNavigate={go} />
+        <Footer />
+      </div>
+    );
+  }
 
   const isApplicantPage = ['dashboard', 'application', 'status', 'documents', 'payments', 'profile'].includes(page);
   if (isApplicantPage) {
     if (!user) {
-      return <LoginPage onNavigate={go} onLogin={login} />;
+      return (
+        <div className="auth-page">
+          <PublicHeader onNavigate={go} />
+          <main>
+            <LoginForm onNavigate={go} onLogin={login} />
+          </main>
+          <Footer />
+        </div>
+      );
     }
     let content;
     if (page === 'application') content = <ApplicationPage onNavigate={go} applicantName={applicantName} application={application} setApplication={setApplication} notify={notify} />;
@@ -2362,3 +2435,12 @@ export default function App() {
     </>
   );
 }
+
+export default function App() {
+  return (
+    <AuthProvider>
+      <AppContent />
+    </AuthProvider>
+  );
+}
+

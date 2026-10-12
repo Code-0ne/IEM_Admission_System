@@ -9,3 +9,4 @@ Thumbs.db
 .impeccable/
 .playwright-mcp/
 .tastemaker/
+*.env
