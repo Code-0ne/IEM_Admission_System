@@ -1,5 +1,14 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import {
+  AuthProvider,
+  useAuth,
+  RegistrationForm,
+  LoginForm,
+  OtpModal,
+  ForgotPassword,
+} from './features/auth/index.js';
+import { applicationApi } from './features/application/applicationApi.js';
+import {
   ArrowLeft,
   ArrowRight,
   Bell,
@@ -1349,7 +1358,7 @@ function DocumentsPanel({ application, setApplication, readOnly = false, showHea
   const [errors, setErrors] = useState({});
   const required = requiredDocumentSlots(application);
 
-  const upload = (slotKey, file) => {
+  const upload = async (slotKey, file) => {
     if (!file) return;
     if (!ALLOWED_MIME.includes(file.type)) {
       setErrors((current) => ({ ...current, [slotKey]: 'Only PDF, JPG or PNG files are allowed.' }));
@@ -1360,31 +1369,68 @@ function DocumentsPanel({ application, setApplication, readOnly = false, showHea
       return;
     }
     setErrors((current) => ({ ...current, [slotKey]: '' }));
+
+    // Set uploading state with initial progress
     setApplication((current) => ({
       ...current,
-      documents: { ...(current.documents || {}), [slotKey]: { name: file.name, size: file.size, type: file.type, status: 'uploading', progress: 0 } },
+      documents: {
+        ...(current.documents || {}),
+        [slotKey]: { name: file.name, size: file.size, type: file.type, status: 'uploading', progress: 15 },
+      },
       updatedAt: new Date().toISOString(),
     }));
-    let progress = 0;
-    const timer = window.setInterval(() => {
-      progress += 20;
-      setApplication((current) => {
-        const doc = current.documents?.[slotKey];
-        if (!doc) { window.clearInterval(timer); return current; }
-        return {
-          ...current,
-          documents: { ...current.documents, [slotKey]: { ...doc, progress, status: progress >= 100 ? 'uploaded' : 'uploading' } },
-        };
+
+    try {
+      const res = await applicationApi.uploadDocument(slotKey, file, (progress) => {
+        setApplication((current) => {
+          const doc = current.documents?.[slotKey];
+          if (!doc) return current;
+          return {
+            ...current,
+            documents: { ...current.documents, [slotKey]: { ...doc, progress } },
+          };
+        });
       });
-      if (progress >= 100) window.clearInterval(timer);
-    }, 140);
+
+      setApplication((current) => ({
+        ...current,
+        documents: {
+          ...(current.documents || {}),
+          [slotKey]: {
+            name: file.name,
+            size: file.size,
+            type: file.type,
+            status: 'uploaded',
+            progress: 100,
+            uploadedAt: res?.document?.uploadedAt || new Date().toISOString(),
+          },
+        },
+      }));
+    } catch (err) {
+      setErrors((current) => ({
+        ...current,
+        [slotKey]: err?.message || 'Document upload failed. Please try again.',
+      }));
+      setApplication((current) => {
+        const docs = { ...(current.documents || {}) };
+        delete docs[slotKey];
+        return { ...current, documents: docs };
+      });
+    }
   };
 
-  const remove = (slotKey) => setApplication((current) => {
-    const documents = { ...(current.documents || {}) };
-    delete documents[slotKey];
-    return { ...current, documents };
-  });
+  const remove = async (slotKey) => {
+    try {
+      await applicationApi.deleteDocument(slotKey);
+    } catch {
+      // Local removal regardless
+    }
+    setApplication((current) => {
+      const documents = { ...(current.documents || {}) };
+      delete documents[slotKey];
+      return { ...current, documents };
+    });
+  };
 
   return (
     <div className="doc-panel">
@@ -1411,6 +1457,17 @@ function DocumentsPanel({ application, setApplication, readOnly = false, showHea
                 </div>
                 {!readOnly && (
                   <div className="doc-slot__actions">
+                    {doc && doc.status === 'uploaded' && (
+                      <a
+                        href={applicationApi.getDocumentFileUrl(slot.key)}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="button button--ghost button--small"
+                        style={{ display: 'inline-flex', alignItems: 'center', gap: '4px', padding: '4px 8px', fontSize: '12px' }}
+                      >
+                        <DownloadSimple size={13} /> View
+                      </a>
+                    )}
                     <label className="doc-upload-btn">
                       <input type="file" accept=".pdf,.jpg,.jpeg,.png,application/pdf,image/jpeg,image/png" onChange={(event) => { upload(slot.key, event.target.files?.[0]); event.target.value = ''; }} hidden />
                       {doc ? 'Replace' : 'Upload'} <UploadSimple size={14} />
@@ -1500,29 +1557,45 @@ function ApplicationPage({ onNavigate, applicantName, application, setApplicatio
     }
   }, [program, application.streamId, setApplication]);
 
-  const saveDraft = () => {
-    setApplication((current) => ({ ...current, status: current.status || 'Draft', updatedAt: new Date().toISOString() }));
-    setNotice('Draft saved with a timestamp. You can return to it after signing in.');
+  const saveDraft = async () => {
+    try {
+      const res = await applicationApi.saveDraft(application);
+      if (res?.application) {
+        setApplication((current) => ({ ...current, ...res.application }));
+      }
+      setNotice('Draft saved on server with timestamp. You can resume anytime.');
+    } catch {
+      setApplication((current) => ({ ...current, status: current.status || 'Draft', updatedAt: new Date().toISOString() }));
+      setNotice('Draft saved locally with timestamp. You can return to it after signing in.');
+    }
     window.setTimeout(() => setNotice(''), 3500);
   };
 
-  const submit = () => {
+  const submit = async () => {
     if (!allComplete) {
       setReviewError('Complete every section before submitting.');
       return;
     }
-    const applicationNo = nextApplicationNumber();
-    const now = new Date().toISOString();
-    setApplication((current) => ({
-      ...current,
-      status: 'Submitted',
-      applicationNo,
-      submittedAt: now,
-      statusChangedAt: now,
-      flaggedSections: [],
-    }));
-    notify(`Application ${applicationNo} submitted and locked. We will review it shortly.`, { type: 'success', link: 'status' });
-    setSubmitted(true);
+    setReviewError('');
+
+    try {
+      const res = await applicationApi.submitApplication(application.declaration === true);
+      const applicationNo = res?.applicationNo || res?.application?.applicationNo || nextApplicationNumber();
+      const now = new Date().toISOString();
+      setApplication((current) => ({
+        ...current,
+        ...(res?.application || {}),
+        status: 'Submitted',
+        applicationNo,
+        submittedAt: now,
+        statusChangedAt: now,
+        flaggedSections: [],
+      }));
+      notify(`Application ${applicationNo} submitted and locked. We will review it shortly.`, { type: 'success', link: 'status' });
+      setSubmitted(true);
+    } catch (err) {
+      setReviewError(err?.message || 'Submission failed. Please check all required fields and documents.');
+    }
   };
 
   if (submitted) {
@@ -2266,16 +2339,39 @@ function AiChatbox({ open, onOpen, onClose }) {
   );
 }
 
-export default function App() {
+function AppContent() {
+  const auth = useAuth();
   const [page, setPage] = useState('home');
   const [user, setUser] = usePersistentState('iem-user', null);
+  const [lastOtpCode, setLastOtpCode] = useState('');
   const userScope = `:${user?.email || user?.mobile || 'guest'}`;
   const [application, setApplication] = usePersistentState(`iem-application${userScope}`, {});
   const [notifications, setNotifications] = usePersistentState(`iem-notifications${userScope}`, []);
   const [aiOpen, setAiOpen] = useState(false);
 
+  useEffect(() => {
+    if (auth.user) {
+      setUser(auth.user);
+      applicationApi
+        .getMyApplication()
+        .then((res) => {
+          if (res?.application) {
+            setApplication((prev) => ({
+              ...prev,
+              ...res.application,
+              documents: res.application.documents || prev.documents || {},
+            }));
+          }
+        })
+        .catch(() => {
+          // Fallback to cached state
+        });
+    }
+  }, [auth.user]);
+
   const go = (next) => {
     if (next === 'logout') {
+      auth.logout();
       setUser(null);
       setPage('home');
       window.scrollTo({ top: 0, behavior: 'smooth' });
@@ -2330,15 +2426,71 @@ export default function App() {
   if (page === 'process') return <ProcessPage onNavigate={go} />;
   if (page === 'faqs') return <FaqsPage onNavigate={go} />;
   if (page === 'contact') return <ContactPage onNavigate={go} />;
-  if (page === 'register') return <RegistrationPage onNavigate={go} onRegistered={register} />;
-  if (page === 'login') return <LoginPage onNavigate={go} onLogin={login} />;
-  if (page === 'verify') return <OtpPage onNavigate={go} onVerified={verify} mobile={user?.mobile} />;
-  if (page === 'forgot') return <ForgotPasswordPage onNavigate={go} />;
+  if (page === 'register') {
+    return (
+      <div className="auth-page">
+        <PublicHeader onNavigate={go} />
+        <main>
+          <RegistrationForm
+            onNavigate={go}
+            onRegistered={(account) => {
+              register(account.user || account);
+              if (account.otpCode) setLastOtpCode(account.otpCode);
+            }}
+          />
+        </main>
+        <Footer />
+      </div>
+    );
+  }
+  if (page === 'login') {
+    return (
+      <div className="auth-page">
+        <PublicHeader onNavigate={go} />
+        <main>
+          <LoginForm onNavigate={go} onLogin={login} />
+        </main>
+        <Footer />
+      </div>
+    );
+  }
+  if (page === 'verify') {
+    return (
+      <div className="auth-page">
+        <PublicHeader onNavigate={go} />
+        <OtpModal
+          email={user?.email}
+          mobile={user?.mobile}
+          initialCode={lastOtpCode}
+          onNavigate={go}
+          onVerified={verify}
+        />
+        <Footer />
+      </div>
+    );
+  }
+  if (page === 'forgot') {
+    return (
+      <div className="auth-page">
+        <PublicHeader onNavigate={go} />
+        <ForgotPassword onNavigate={go} />
+        <Footer />
+      </div>
+    );
+  }
 
   const isApplicantPage = ['dashboard', 'application', 'status', 'documents', 'payments', 'profile'].includes(page);
   if (isApplicantPage) {
     if (!user) {
-      return <LoginPage onNavigate={go} onLogin={login} />;
+      return (
+        <div className="auth-page">
+          <PublicHeader onNavigate={go} />
+          <main>
+            <LoginForm onNavigate={go} onLogin={login} />
+          </main>
+          <Footer />
+        </div>
+      );
     }
     let content;
     if (page === 'application') content = <ApplicationPage onNavigate={go} applicantName={applicantName} application={application} setApplication={setApplication} notify={notify} />;
@@ -2362,3 +2514,12 @@ export default function App() {
     </>
   );
 }
+
+export default function App() {
+  return (
+    <AuthProvider>
+      <AppContent />
+    </AuthProvider>
+  );
+}
+
