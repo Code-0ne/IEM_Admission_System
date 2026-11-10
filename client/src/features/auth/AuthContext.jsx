@@ -25,9 +25,8 @@ export function AuthProvider({ children }) {
           setUser(data.user);
           window.localStorage.setItem('iem_cached_user', JSON.stringify(data.user));
         }
-      } catch {
-        if (mounted) {
-          // Session expired or unauthenticated
+      } catch (error) {
+        if (mounted && (error?.statusCode === 401 || error?.code === 'UNAUTHORIZED')) {
           setUser(null);
           window.localStorage.removeItem('iem_cached_user');
         }
@@ -45,24 +44,6 @@ export function AuthProvider({ children }) {
   const register = async (payload) => {
     const res = await http.post('/auth/register', payload);
     return res;
-  };
-
-  const verifyOtp = async ({ email, otp }) => {
-    const res = await http.post('/auth/verify-otp', { email, otp });
-    // Update cached user verification status if matching email
-    setUser((prev) => {
-      if (prev && prev.email === email) {
-        const updated = { ...prev, isVerified: true };
-        window.localStorage.setItem('iem_cached_user', JSON.stringify(updated));
-        return updated;
-      }
-      return prev;
-    });
-    return res;
-  };
-
-  const resendOtp = async ({ email }) => {
-    return http.post('/auth/resend-otp', { email });
   };
 
   const login = async ({ identifier, password }) => {
@@ -103,8 +84,6 @@ export function AuthProvider({ children }) {
         isAuthenticated: Boolean(user),
         loading,
         register,
-        verifyOtp,
-        resendOtp,
         login,
         logout,
         forgotPassword,

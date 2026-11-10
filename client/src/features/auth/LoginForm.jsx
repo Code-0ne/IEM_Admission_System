@@ -1,11 +1,12 @@
 import { useState } from 'react';
-import { User, LockKey, ArrowRight, Warning, ShieldCheck } from '@phosphor-icons/react';
+import { User, LockKey, ArrowRight, Warning, ShieldCheck, Eye, EyeSlash } from '@phosphor-icons/react';
 import { useAuth } from './AuthContext.jsx';
 
 export function LoginForm({ onNavigate, onLogin }) {
   const { login } = useAuth();
   const [identifier, setIdentifier] = useState('');
   const [password, setPassword] = useState('');
+  const [showPassword, setShowPassword] = useState(false);
   const [error, setError] = useState('');
   const [isLocked, setIsLocked] = useState(false);
   const [loading, setLoading] = useState(false);
@@ -76,20 +77,32 @@ export function LoginForm({ onNavigate, onLogin }) {
             </span>
           </label>
 
-          <label className="field">
+          <div className="field">
             <span className="field__label">Password *</span>
-            <span className="field__control">
+            <span className="field__control password-control">
               <LockKey size={17} weight="regular" />
               <input
-                type="password"
+                type={showPassword ? 'text' : 'password'}
+                id="login-password"
                 placeholder="Enter your password"
                 autoComplete="current-password"
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
+                aria-describedby="login-password-visibility"
                 required
               />
+              <button
+                className="password-visibility"
+                id="login-password-visibility"
+                type="button"
+                aria-label={showPassword ? 'Hide password' : 'Show password'}
+                aria-pressed={showPassword}
+                onClick={() => setShowPassword((visible) => !visible)}
+              >
+                {showPassword ? <EyeSlash size={18} /> : <Eye size={18} />}
+              </button>
             </span>
-          </label>
+          </div>
 
           <div className="form-meta">
             <label>

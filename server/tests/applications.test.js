@@ -35,25 +35,19 @@ describe('Phase 3 — Applications & Documents Module Tests', () => {
     resetAuthStore();
     resetApplicationStore();
 
-    // 1. Register & verify applicant
+    // 1. Register applicant
     const regRes = await request(app).post('/api/auth/register').send(applicantData);
     applicantId = regRes.body.user.id;
-    await request(app)
-      .post('/api/auth/verify-otp')
-      .send({ email: applicantData.email, otp: regRes.body.otpCode });
 
     const loginRes = await request(app)
       .post('/api/auth/login')
       .send({ identifier: applicantData.email, password: applicantData.password });
     applicantCookie = loginRes.headers['set-cookie']?.[0] || '';
 
-    // 2. Register, verify & elevate admin
+    // 2. Register & elevate admin
     const adminReg = await request(app).post('/api/auth/register').send(adminData);
     adminId = adminReg.body.user.id;
     setInMemoryUserRole(adminId, 'admin');
-    await request(app)
-      .post('/api/auth/verify-otp')
-      .send({ email: adminData.email, otp: adminReg.body.otpCode });
 
     const adminLogin = await request(app)
       .post('/api/auth/login')
@@ -129,6 +123,7 @@ describe('Phase 3 — Applications & Documents Module Tests', () => {
       assert.equal(res.body.success, true);
       assert.equal(res.body.application.status, 'Draft');
       assert.equal(res.body.application.email, applicantData.email);
+      assert.equal(res.body.application.category, '');
     });
 
     it('PUT /api/applications/me should save partial application data with timestamp', async () => {
@@ -362,6 +357,21 @@ describe('Phase 3 — Applications & Documents Module Tests', () => {
       assert.equal(submitRes.body.application.status, 'Submitted');
       assert.ok(submitRes.body.applicationNo.startsWith('UEM-'));
 
+      const applicantView = await request(app)
+        .get('/api/applications/me')
+        .set('Cookie', applicantCookie);
+      assert.equal(applicantView.status, 200);
+      assert.equal(applicantView.body.application.status, 'Submitted');
+
+      const adminView = await request(app)
+        .get('/api/admin/applications')
+        .set('Cookie', adminCookie);
+      assert.equal(adminView.status, 200);
+      assert.equal(
+        adminView.body.applications.find((item) => item.id === submitRes.body.application.id)?.status,
+        'Submitted'
+      );
+
       // 5. Subsequent draft save should be locked (Forbidden 403)
       const editAfterSubmit = await request(app)
         .put('/api/applications/me')
@@ -447,6 +457,7 @@ describe('Phase 3 — Applications & Documents Module Tests', () => {
 
       assert.equal(res.status, 200);
       assert.equal(res.body.application.id, submittedAppId);
+      assert.equal(res.body.application.status, 'Submitted');
       assert.ok(res.body.application.documents.marksheet10);
     });
 
@@ -487,6 +498,39 @@ describe('Phase 3 — Applications & Documents Module Tests', () => {
 
       assert.equal(approveRes.status, 200);
       assert.equal(approveRes.body.status, 'Approved');
+    });
+
+    it('POST /api/applications/me/payment/demo should persist a development payment and confirm admission', async () => {
+      const beforeApproval = await request(app)
+        .post('/api/applications/me/payment/demo')
+        .set('Cookie', applicantCookie);
+      assert.equal(beforeApproval.status, 409);
+
+      await request(app)
+        .post(`/api/admin/applications/${submittedAppId}/decision`)
+        .set('Cookie', adminCookie)
+        .send({ decision: 'Approved' });
+
+      const paymentRes = await request(app)
+        .post('/api/applications/me/payment/demo')
+        .set('Cookie', applicantCookie);
+
+      assert.equal(paymentRes.status, 200, JSON.stringify(paymentRes.body));
+      assert.equal(paymentRes.body.application.status, 'AdmissionConfirmed');
+      assert.equal(paymentRes.body.application.payment.amount, 57500);
+      assert.match(paymentRes.body.application.payment.transactionId, /^MOCK-/);
+
+      const resumed = await request(app)
+        .get('/api/applications/me')
+        .set('Cookie', applicantCookie);
+      assert.equal(resumed.body.application.status, 'AdmissionConfirmed');
+      assert.equal(resumed.body.application.payment.receiptNo, paymentRes.body.application.payment.receiptNo);
+
+      const repeatedPayment = await request(app)
+        .post('/api/applications/me/payment/demo')
+        .set('Cookie', applicantCookie);
+      assert.equal(repeatedPayment.status, 200);
+      assert.equal(repeatedPayment.body.application.payment.receiptNo, paymentRes.body.application.payment.receiptNo);
     });
 
     it('GET /api/admin/applications/dashboard and /api/admin/dashboard should return metrics', async () => {
@@ -546,6 +590,15 @@ describe('Phase 3 — Applications & Documents Module Tests', () => {
       assert.equal(flagRes.status, 200);
       assert.equal(flagRes.body.status, 'CorrectionRequested');
       assert.deepEqual(flagRes.body.flaggedSections, ['academic']);
+      assert.equal(flagRes.body.comment, 'Please check your 10th percentage against your marksheet.');
+
+      const applicantView = await request(app)
+        .get('/api/applications/me')
+        .set('Cookie', applicantCookie);
+      assert.equal(applicantView.status, 200);
+      assert.equal(applicantView.body.application.status, 'CorrectionRequested');
+      assert.deepEqual(applicantView.body.application.flaggedSections, ['academic']);
+      assert.equal(applicantView.body.application.decisionReason, flagRes.body.comment);
 
       // 2. Applicant edits flagged section (academic) -> should succeed
       const editAcademic = await request(app)

@@ -135,7 +135,7 @@ export class AuthService {
           mobile: cleanMobile,
           password_hash: passwordHash,
           role: 'applicant', // Force default role
-          is_verified: false,
+          is_verified: true,
           consent: Boolean(consent),
         })
         .select()
@@ -145,22 +145,7 @@ export class AuthService {
         throw new BadRequestError(`Registration failed: ${insertError.message}`);
       }
 
-      // Generate & store OTP
-      const otpCode = generateOtpCode();
-      const otpHash = hashOtp(otpCode);
-      const expiresAt = new Date(Date.now() + 10 * 60 * 1000).toISOString();
-
-      await client.from('otps').insert({
-        user_id: newUser.id,
-        otp_hash: otpHash,
-        purpose: 'verification',
-        expires_at: expiresAt,
-      });
-
-      return {
-        user: sanitizeUser(newUser),
-        otpCode: config.nodeEnv === 'development' || config.nodeEnv === 'test' ? otpCode : undefined,
-      };
+      return { user: sanitizeUser(newUser) };
     }
 
     // --- In-memory Store Fallback ---
@@ -184,7 +169,7 @@ export class AuthService {
       mobile: cleanMobile,
       password_hash: passwordHash,
       role: 'applicant',
-      is_verified: false,
+      is_verified: true,
       failed_login_attempts: 0,
       locked_until: null,
       consent: Boolean(consent),
@@ -196,184 +181,7 @@ export class AuthService {
     inMemoryStore.usersByEmail.set(normalizedEmail, userId);
     inMemoryStore.usersByPhone.set(phoneKey, userId);
 
-    // Create OTP
-    const otpCode = generateOtpCode();
-    const otpId = crypto.randomUUID();
-    const expiresAt = new Date(Date.now() + 10 * 60 * 1000).toISOString();
-
-    inMemoryStore.otps.set(otpId, {
-      id: otpId,
-      user_id: userId,
-      otp_hash: hashOtp(otpCode),
-      purpose: 'verification',
-      attempts: 0,
-      expires_at: expiresAt,
-      created_at: now,
-    });
-
-    return {
-      user: sanitizeUser(newUser),
-      otpCode: config.nodeEnv === 'development' || config.nodeEnv === 'test' ? otpCode : undefined,
-    };
-  }
-
-  /**
-   * Verify email OTP
-   */
-  async verifyOtp({ email, otp }) {
-    if (!email || !otp) {
-      throw new BadRequestError('Email and OTP code are required');
-    }
-
-    const normalizedEmail = email.trim().toLowerCase();
-    const cleanOtp = otp.trim();
-    const expectedHash = hashOtp(cleanOtp);
-    const now = new Date();
-
-    const client = getSupabaseClient();
-
-    if (client) {
-      const { data: user } = await client
-        .from('users')
-        .select('id, is_verified')
-        .eq('email', normalizedEmail)
-        .maybeSingle();
-
-      if (!user) {
-        throw new NotFoundError('User not found');
-      }
-
-      const { data: activeOtps } = await client
-        .from('otps')
-        .select('*')
-        .eq('user_id', user.id)
-        .eq('purpose', 'verification')
-        .gt('expires_at', now.toISOString())
-        .order('created_at', { ascending: false });
-
-      const otpRecord = activeOtps?.[0];
-      if (!otpRecord) {
-        throw new BadRequestError('OTP has expired or does not exist. Please request a new one.');
-      }
-
-      if (otpRecord.attempts >= 5) {
-        throw new BadRequestError('Too many invalid attempts. Please request a new OTP.');
-      }
-
-      if (otpRecord.otp_hash !== expectedHash) {
-        await client
-          .from('otps')
-          .update({ attempts: otpRecord.attempts + 1 })
-          .eq('id', otpRecord.id);
-        throw new BadRequestError('Invalid OTP code. Please check and try again.');
-      }
-
-      // Mark verified
-      await client.from('users').update({ is_verified: true, updated_at: now.toISOString() }).eq('id', user.id);
-      // Consume OTP
-      await client.from('otps').delete().eq('id', otpRecord.id);
-
-      return { success: true, message: 'Account verified successfully' };
-    }
-
-    // In-memory fallback
-    const userId = inMemoryStore.usersByEmail.get(normalizedEmail);
-    if (!userId) {
-      throw new NotFoundError('User not found');
-    }
-
-    const user = inMemoryStore.users.get(userId);
-    const matchingOtp = Array.from(inMemoryStore.otps.values())
-      .filter((o) => o.user_id === userId && o.purpose === 'verification' && new Date(o.expires_at) > now)
-      .sort((a, b) => new Date(b.created_at) - new Date(a.created_at))[0];
-
-    if (!matchingOtp) {
-      throw new BadRequestError('OTP has expired or does not exist. Please request a new one.');
-    }
-
-    if (matchingOtp.attempts >= 5) {
-      throw new BadRequestError('Too many invalid attempts. Please request a new OTP.');
-    }
-
-    if (matchingOtp.otp_hash !== expectedHash) {
-      matchingOtp.attempts += 1;
-      throw new BadRequestError('Invalid OTP code. Please check and try again.');
-    }
-
-    user.is_verified = true;
-    user.updated_at = now.toISOString();
-    inMemoryStore.otps.delete(matchingOtp.id);
-
-    return { success: true, message: 'Account verified successfully' };
-  }
-
-  /**
-   * Resend verification OTP
-   */
-  async resendOtp({ email }) {
-    if (!email) {
-      throw new BadRequestError('Email is required');
-    }
-
-    const normalizedEmail = email.trim().toLowerCase();
-    const now = new Date().toISOString();
-    const otpCode = generateOtpCode();
-    const expiresAt = new Date(Date.now() + 10 * 60 * 1000).toISOString();
-
-    const client = getSupabaseClient();
-    if (client) {
-      const { data: user } = await client.from('users').select('id, is_verified').eq('email', normalizedEmail).maybeSingle();
-      if (!user) {
-        throw new NotFoundError('No account found with this email');
-      }
-
-      // Invalidate old verification OTPs
-      await client.from('otps').delete().eq('user_id', user.id).eq('purpose', 'verification');
-
-      // Create new OTP
-      await client.from('otps').insert({
-        user_id: user.id,
-        otp_hash: hashOtp(otpCode),
-        purpose: 'verification',
-        expires_at: expiresAt,
-      });
-
-      return {
-        success: true,
-        message: 'A new OTP has been sent to your email',
-        otpCode: config.nodeEnv === 'development' || config.nodeEnv === 'test' ? otpCode : undefined,
-      };
-    }
-
-    // In-memory fallback
-    const userId = inMemoryStore.usersByEmail.get(normalizedEmail);
-    if (!userId) {
-      throw new NotFoundError('No account found with this email');
-    }
-
-    // Clean old
-    for (const [id, o] of inMemoryStore.otps.entries()) {
-      if (o.user_id === userId && o.purpose === 'verification') {
-        inMemoryStore.otps.delete(id);
-      }
-    }
-
-    const otpId = crypto.randomUUID();
-    inMemoryStore.otps.set(otpId, {
-      id: otpId,
-      user_id: userId,
-      otp_hash: hashOtp(otpCode),
-      purpose: 'verification',
-      attempts: 0,
-      expires_at: expiresAt,
-      created_at: now,
-    });
-
-    return {
-      success: true,
-      message: 'A new OTP has been sent to your email',
-      otpCode: config.nodeEnv === 'development' || config.nodeEnv === 'test' ? otpCode : undefined,
-    };
+    return { user: sanitizeUser(newUser) };
   }
 
   /**

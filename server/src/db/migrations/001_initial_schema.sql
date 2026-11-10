@@ -137,7 +137,7 @@ CREATE TABLE IF NOT EXISTS applications (
   post_graduate JSONB,
 
   -- Other information
-  category VARCHAR(20) DEFAULT 'General' CHECK (category IN ('General', 'OBC', 'SC', 'ST', 'EWS')),
+  category VARCHAR(20) CHECK (category IN ('General', 'OBC', 'SC', 'ST', 'EWS')),
   blood_group VARCHAR(5),
   religion VARCHAR(50),
   activities VARCHAR(250),
@@ -159,6 +159,8 @@ CREATE TABLE IF NOT EXISTS applications (
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
+
+ALTER TABLE applications ALTER COLUMN category DROP DEFAULT;
 
 CREATE INDEX IF NOT EXISTS idx_applications_status ON applications(status);
 CREATE INDEX IF NOT EXISTS idx_applications_course ON applications(course_id);

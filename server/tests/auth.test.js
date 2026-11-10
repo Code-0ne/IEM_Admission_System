@@ -9,8 +9,32 @@ describe('Phase 2 — Authentication & Access Control Tests', () => {
     resetAuthStore();
   });
 
-  describe('1. Account Registration & Email OTP Generation', () => {
-    it('should register a new applicant, issue default applicant role, and generate an OTP', async () => {
+  describe('1. Account Registration', () => {
+    it('should return field-specific validation details for invalid registration data', async () => {
+      const res = await request(app)
+        .post('/api/auth/register')
+        .send({
+          fullName: '',
+          email: 'not-an-email',
+          countryCode: '+91',
+          mobile: '123',
+          password: 'weak',
+          consent: false,
+        });
+
+      assert.equal(res.status, 422);
+      assert.equal(res.body.error.code, 'VALIDATION_ERROR');
+      assert.equal(res.body.error.message, 'Invalid request data');
+      assert.ok(Array.isArray(res.body.error.details));
+      for (const field of ['fullName', 'email', 'mobile', 'password', 'consent']) {
+        assert.ok(
+          res.body.error.details.some((detail) => detail.path === field),
+          `expected validation detail for ${field}`
+        );
+      }
+    });
+
+    it('should register a new applicant as verified without generating a verification OTP', async () => {
       const res = await request(app)
         .post('/api/auth/register')
         .send({
@@ -25,10 +49,9 @@ describe('Phase 2 — Authentication & Access Control Tests', () => {
       assert.equal(res.status, 201);
       assert.equal(res.body.success, true);
       assert.equal(res.body.user.role, 'applicant');
-      assert.equal(res.body.user.isVerified, false);
+      assert.equal(res.body.user.isVerified, true);
       assert.equal(res.body.user.email, 'subhashree@example.com');
-      assert.ok(res.body.otpCode, 'OTP code should be generated');
-      assert.equal(res.body.otpCode.length, 6);
+      assert.equal(res.body.otpCode, undefined);
     });
 
     it('should reject registration if email is already taken', async () => {
@@ -52,7 +75,7 @@ describe('Phase 2 — Authentication & Access Control Tests', () => {
       assert.equal(res2.body.error.code, 'CONFLICT');
     });
 
-    it('should verify OTP and mark user account as verified', async () => {
+    it('should allow a newly registered applicant to sign in without OTP verification', async () => {
       const reg = await request(app)
         .post('/api/auth/register')
         .send({
@@ -64,41 +87,14 @@ describe('Phase 2 — Authentication & Access Control Tests', () => {
           consent: true,
         });
 
-      const otp = reg.body.otpCode;
+      assert.equal(reg.status, 201);
+      const login = await request(app)
+        .post('/api/auth/login')
+        .send({ identifier: 'tanmoy@example.com', password: 'Password@123' });
 
-      // Bad OTP attempt
-      const badVerify = await request(app)
-        .post('/api/auth/verify-otp')
-        .send({ email: 'tanmoy@example.com', otp: '000000' });
-      assert.equal(badVerify.status, 400);
-
-      // Correct OTP attempt
-      const goodVerify = await request(app)
-        .post('/api/auth/verify-otp')
-        .send({ email: 'tanmoy@example.com', otp });
-
-      assert.equal(goodVerify.status, 200);
-      assert.equal(goodVerify.body.success, true);
-    });
-
-    it('should resend OTP when requested', async () => {
-      await request(app)
-        .post('/api/auth/register')
-        .send({
-          fullName: 'Priya Das',
-          email: 'priya@example.com',
-          countryCode: '+91',
-          mobile: '9876543215',
-          password: 'Password@123',
-          consent: true,
-        });
-
-      const resend = await request(app)
-        .post('/api/auth/resend-otp')
-        .send({ email: 'priya@example.com' });
-
-      assert.equal(resend.status, 200);
-      assert.ok(resend.body.otpCode);
+      assert.equal(login.status, 200);
+      assert.equal(login.body.user.isVerified, true);
+      assert.ok(login.headers['set-cookie']);
     });
   });
 
@@ -144,7 +140,7 @@ describe('Phase 2 — Authentication & Access Control Tests', () => {
 
   describe('3. Session Row Creation & Immediate Revocation on Logout', () => {
     it('should create session cookie on login, allow access to /me, and revoke session instantly on logout', async () => {
-      // 1. Register & verify
+      // 1. Register
       const reg = await request(app)
         .post('/api/auth/register')
         .send({
@@ -155,10 +151,6 @@ describe('Phase 2 — Authentication & Access Control Tests', () => {
           password: 'Password@123',
           consent: true,
         });
-      await request(app)
-        .post('/api/auth/verify-otp')
-        .send({ email: 'ananya@example.com', otp: reg.body.otpCode });
-
       // 2. Login
       const loginRes = await request(app)
         .post('/api/auth/login')

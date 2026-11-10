@@ -105,6 +105,19 @@ applicationsRouter.post('/me/submit', authenticate, async (req, res, next) => {
 });
 
 /**
+ * POST /api/applications/me/payment/demo
+ * Record a simulated development payment and confirm the approved application
+ */
+applicationsRouter.post('/me/payment/demo', authenticate, async (req, res, next) => {
+  try {
+    const result = await applicationService.recordDemoPayment(req.user);
+    res.status(200).json(result);
+  } catch (err) {
+    next(err);
+  }
+});
+
+/**
  * POST /api/applications/me/documents/:slot
  * Upload document to labelled slot (FR9, FR6.3, FR6.4)
  */

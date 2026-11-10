@@ -1,5 +1,18 @@
 import { http } from '../../api/http.js';
 
+function mapApplicationForUi(application) {
+  if (!application) return application;
+  const statusLabels = {
+    UnderReview: 'Under Review',
+    CorrectionRequested: 'Correction Requested',
+    AdmissionConfirmed: 'Admission Confirmed',
+  };
+  return {
+    ...application,
+    status: statusLabels[application.status] || application.status,
+  };
+}
+
 export const applicationApi = {
   /**
    * Fetch courses catalogue
@@ -13,7 +26,16 @@ export const applicationApi = {
    * Fetch current applicant's application and attached documents (FR4, FR12)
    */
   async getMyApplication() {
-    return http.get('/applications/me');
+    const result = await http.get('/applications/me');
+    return { ...result, application: mapApplicationForUi(result.application) };
+  },
+
+  /**
+   * Record a simulated payment in development only.
+   */
+  async recordDemoPayment() {
+    const result = await http.post('/applications/me/payment/demo');
+    return { ...result, application: mapApplicationForUi(result.application) };
   },
 
   /**

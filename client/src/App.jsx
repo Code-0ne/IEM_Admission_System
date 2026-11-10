@@ -1,10 +1,9 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import {
   AuthProvider,
   useAuth,
   RegistrationForm,
   LoginForm,
-  OtpModal,
   ForgotPassword,
 } from './features/auth/index.js';
 import { applicationApi } from './features/application/applicationApi.js';
@@ -64,7 +63,6 @@ const MAX_DOB_AGE = 28;
 const DOB_MAX = new Date().toISOString().slice(0, 10);
 const DOB_MIN = new Date(Date.now() - MAX_DOB_AGE * 365.25 * 24 * 3600 * 1000).toISOString().slice(0, 10);
 const AI_ENABLED = true;
-const OTP_VERIFY_SECONDS = 600;
 const OTP_RESET_SECONDS = 900;
 const MAX_FILE_BYTES = 5 * 1024 * 1024;
 const ALLOWED_MIME = ['application/pdf', 'image/jpeg', 'image/png'];
@@ -175,6 +173,7 @@ const FORM_STEPS = [
   { key: 'documents', label: 'Documents' },
   { key: 'review', label: 'Review & Submit' },
 ];
+const ApplicationFieldErrorsContext = createContext({});
 
 const APPLICATION_STATUSES = ['Draft', 'Submitted', 'Under Review', 'Correction Requested', 'Approved', 'Rejected', 'Admission Confirmed'];
 const APPLICANT_VISIBLE_STATUSES = ['Submitted', 'Under Review', 'Correction Requested', 'Approved', 'Admission Confirmed'];
@@ -209,7 +208,7 @@ const ADMISSION_OFFICES = [
 ];
 
 const FAQS = [
-  { q: 'How do I apply for admission?', a: 'Create an account, verify it with the OTP sent to your email, then fill the multi-section application form. You can save drafts at any step and resume later. Once every mandatory field and document passes validation you can submit and receive a unique application number.' },
+  { q: 'How do I apply for admission?', a: 'Create an account and sign in, then fill the multi-section application form. You can save drafts at any step and resume later. Once every mandatory field and document passes validation you can submit and receive a unique application number.' },
   { q: 'What is the eligibility for my course?', a: 'Eligibility differs by programme. Each programme page lists the minimum 10th, 12th, PCM and graduation percentages. For example, B.Tech CSE needs 10th and 12th at 80% or above; MBA needs 55% in 10th, 12th and graduation.' },
   { q: 'Which documents do I need to upload?', a: 'Class 10 and Class 12 marksheets, an ID proof, a photograph, a graduation marksheet for PG programmes, and a category certificate if your category is not General. Files must be PDF, JPG or PNG and no larger than 5 MB each.' },
   { q: 'What is the application fee?', a: 'There is no mandatory application fee. The booking / admission amount becomes payable after your application is approved. It depends on your course and whether you are a class-12 appearing or passed-out candidate.' },
@@ -262,60 +261,35 @@ function requiredDocumentSlots(application) {
 }
 
 function usePersistentState(baseKey, initial) {
-  const storedKey = useRef(baseKey);
-  const [value, setValue] = useState(() => {
+  const readStoredValue = (key) => {
     try {
-      const raw = window.localStorage.getItem(baseKey);
+      const raw = window.localStorage.getItem(key);
       return raw ? JSON.parse(raw) : initial;
     } catch {
       return initial;
     }
-  });
-  useEffect(() => {
-    if (storedKey.current !== baseKey) {
-      storedKey.current = baseKey;
-      setValue(() => {
-        try {
-          const raw = window.localStorage.getItem(baseKey);
-          return raw ? JSON.parse(raw) : initial;
-        } catch {
-          return initial;
-        }
-      });
-    }
-  }, [baseKey]); // eslint-disable-line react-hooks/exhaustive-deps
-  useEffect(() => {
+  };
+  const [stored, setStored] = useState(() => ({ key: baseKey, value: readStoredValue(baseKey) }));
+  const storedRef = useRef(stored);
+  if (storedRef.current.key !== baseKey) {
+    storedRef.current = { key: baseKey, value: readStoredValue(baseKey) };
+  }
+  const value = storedRef.current.value;
+  const setValue = useCallback((updater) => {
+    const current = storedRef.current.key === baseKey
+      ? storedRef.current.value
+      : readStoredValue(baseKey);
+    const next = typeof updater === 'function' ? updater(current) : updater;
+    const nextStored = { key: baseKey, value: next };
+    storedRef.current = nextStored;
+    setStored(nextStored);
     try {
-      window.localStorage.setItem(storedKey.current, JSON.stringify(value));
+      window.localStorage.setItem(baseKey, JSON.stringify(next));
     } catch {
-      /* storage unavailable */
+      // Keep the in-memory state when browser storage is unavailable.
     }
-  }, [value]);
+  }, [baseKey]);
   return [value, setValue];
-}
-
-function nextApplicationNumber() {
-  const year = new Date().getFullYear();
-  let sequence = 0;
-  try {
-    sequence = Number(window.localStorage.getItem('iem-app-seq') || '0') + 1;
-    window.localStorage.setItem('iem-app-seq', String(sequence));
-  } catch {
-    sequence = 1;
-  }
-  return `UEM-${year}-${String(sequence).padStart(5, '0')}`;
-}
-
-function nextReceiptNumber() {
-  const year = new Date().getFullYear();
-  let sequence = 0;
-  try {
-    sequence = Number(window.localStorage.getItem('iem-receipt-seq') || '0') + 1;
-    window.localStorage.setItem('iem-receipt-seq', String(sequence));
-  } catch {
-    sequence = 1;
-  }
-  return `UEM-RCPT-${year}-${String(sequence).padStart(5, '0')}`;
 }
 
 function evaluateStep(stepKey, application) {
@@ -439,6 +413,119 @@ function getStepErrors(stepKey, application) {
       missing.forEach((slot) => errors.push(`${slot.label} not uploaded`));
       break;
     }
+    default:
+      break;
+  }
+  return errors;
+}
+
+function getApplicationFieldErrors(stepKey, application) {
+  const errors = {};
+  const add = (name, message) => { errors[name] = message; };
+
+  switch (stepKey) {
+    case 'personal':
+      if (!has(application.programId)) add('programId', 'Programme is required');
+      if (!has(application.streamId)) add('streamId', 'Stream is required');
+      if (!has(application.fullName)) add('fullName', 'Full name is required');
+      else if (application.fullName.length > 100) add('fullName', 'Full name must be 100 characters or fewer');
+      if (!has(application.gender)) add('gender', 'Gender is required');
+      if (!has(application.dob)) add('dob', 'Date of birth is required');
+      else if (!isDobInRange(application.dob)) add('dob', `Date of birth must be between ${DOB_MIN} and ${DOB_MAX}`);
+      if (!has(application.email)) add('email', 'Email is required');
+      else if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(application.email)) add('email', 'Enter a valid email address');
+      if (!isTenDigit(application.mobile)) add('mobile', 'Mobile must be a 10-digit number');
+      break;
+    case 'address':
+      if (!has(application.presentLine1)) add('presentLine1', 'Present address line 1 is required');
+      if (!isSixDigit(application.presentPIN)) add('presentPIN', 'Present PIN must be a 6-digit code');
+      if (application.sameAsPresent !== true) {
+        if (!has(application.permLine1)) add('permLine1', 'Permanent address line 1 is required');
+        if (!isSixDigit(application.permPIN)) add('permPIN', 'Permanent PIN must be a 6-digit code');
+      }
+      break;
+    case 'family':
+      if (!has(application.fatherName)) add('fatherName', "Father's name is required");
+      if (has(application.fatherEmail) && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(application.fatherEmail)) add('fatherEmail', "Enter a valid father's email address");
+      if (has(application.fatherMobile) && !isTenDigit(application.fatherMobile)) add('fatherMobile', "Father's mobile must be a 10-digit number");
+      if (!has(application.motherName)) add('motherName', "Mother's name is required");
+      if (has(application.motherEmail) && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(application.motherEmail)) add('motherEmail', "Enter a valid mother's email address");
+      if (has(application.motherMobile) && !isTenDigit(application.motherMobile)) add('motherMobile', "Mother's mobile must be a 10-digit number");
+      if (!has(application.guardianName)) add('guardianName', "Guardian's name is required");
+      if (!has(application.guardianOffice)) add('guardianOffice', 'Guardian office address is required');
+      if (!has(application.monthlyIncome)) add('monthlyIncome', 'Monthly income is required');
+      else if (Number(application.monthlyIncome) < 0) add('monthlyIncome', 'Monthly income cannot be negative');
+      if (has(application.guardianMobile) && !isTenDigit(application.guardianMobile)) add('guardianMobile', "Guardian's mobile must be a 10-digit number");
+      break;
+    case 'citizenship':
+      if (application.isForeign === 'Yes') {
+        if (!has(application.foreignResidence)) add('foreignResidence', 'Country of residence is required');
+        if (!has(application.passportNo)) add('passportNo', 'Passport number is required');
+        if (!has(application.visaNo)) add('visaNo', 'Visa number is required');
+      } else if (application.isForeign !== 'No') {
+        add('isForeign', 'Select whether you are a foreign student');
+      }
+      break;
+    case 'academics':
+      if (!has(application.admissionTest)) add('admissionTest', 'Admission test is required');
+      if (!isYearInRange(application.examYear, EXAM_YEAR_MIN, ACADEMIC_YEAR_START)) {
+        add('examYear', `Exam year must be between ${EXAM_YEAR_MIN} and ${ACADEMIC_YEAR_START}`);
+      }
+      if (!has(application.registrationNo)) add('registrationNo', 'Registration number is required');
+      if (!has(application.rank)) add('rank', 'Rank is required');
+      else if (Number(application.rank) < 0) add('rank', 'Rank cannot be negative');
+      if (!has(application.tenthExamName)) add('tenthExamName', 'Class 10 exam name is required');
+      if (!has(application.tenthBoard)) add('tenthBoard', 'Class 10 board is required');
+      if (!isYearInRange(application.tenthYear, OLDEST_PASSING_YEAR, ACADEMIC_YEAR_START)) {
+        add('tenthYear', `Class 10 year must be between ${OLDEST_PASSING_YEAR} and ${ACADEMIC_YEAR_START}`);
+      }
+      if (!isPercent(application.tenthPercent)) add('tenthPercent', 'Class 10 percentage must be 0–100');
+      if (!has(application.tenthSchool)) add('tenthSchool', 'Class 10 school is required');
+      if (!has(application.tenthSubjects)) add('tenthSubjects', 'Class 10 subjects are required');
+      if (!has(application.twelfthExamName)) add('twelfthExamName', 'Class 12 exam name is required');
+      if (!has(application.twelfthBoard)) add('twelfthBoard', 'Class 12 board is required');
+      if (!isYearInRange(application.twelfthYear, OLDEST_PASSING_YEAR, ACADEMIC_YEAR_START)) {
+        add('twelfthYear', `Class 12 year must be between ${OLDEST_PASSING_YEAR} and ${ACADEMIC_YEAR_START}`);
+      }
+      if (!has(application.twelfthSchool)) add('twelfthSchool', 'Class 12 school is required');
+      if (!has(application.twelfthSchoolAddress)) add('twelfthSchoolAddress', 'Class 12 school address is required');
+      if (!has(application.class12Status)) add('class12Status', 'Class 12 status is required');
+      if (application.class12Status === 'Passed' && !isPercent(application.twelfthPercent)) {
+        add('twelfthPercent', 'Class 12 percentage must be 0–100');
+      }
+      if (!hideTwelfthSubjectMarks(application) && application.class12Status === 'Passed') {
+        if (!isPercent(application.marks12English)) add('marks12English', 'Class 12 English marks are required');
+        if (!isPercent(application.marks12Physics)) add('marks12Physics', 'Class 12 Physics marks are required');
+        if (!isPercent(application.marks12ChemCS)) add('marks12ChemCS', 'Class 12 Chemistry marks are required');
+        if (!isPercent(application.marks12Maths)) add('marks12Maths', 'Class 12 Maths marks are required');
+      }
+      if (isPostgraduate(application)) {
+        if (!has(application.degreeName)) add('degreeName', 'Degree name is required');
+        if (!has(application.degreeBoard)) add('degreeBoard', 'Degree board/university is required');
+        if (!isYearInRange(application.degreeYear, OLDEST_PASSING_YEAR, ACADEMIC_YEAR_START)) {
+          add('degreeYear', `Degree year must be between ${OLDEST_PASSING_YEAR} and ${ACADEMIC_YEAR_START}`);
+        }
+        if (!isPercent(application.degreePercent)) add('degreePercent', 'Degree percentage must be 0–100');
+        if (!has(application.degreeInstitution)) add('degreeInstitution', 'Degree institution is required');
+        if (!has(application.degreeSubjects)) add('degreeSubjects', 'Degree subjects are required');
+      }
+      if (has(application.pgYear) && !isYearInRange(application.pgYear, 2000, 2026)) add('pgYear', 'Year must be between 2000 and 2026');
+      if (has(application.pgPercent) && !isPercent(application.pgPercent)) add('pgPercent', 'Percentage must be 0–100');
+      break;
+    case 'other':
+      if (!has(application.category)) add('category', 'Category is required');
+      if (!has(application.abcId)) add('abcId', 'ABC ID is required');
+      if (has(application.aadhaar) && !/^\d{12}$/.test(String(application.aadhaar).trim())) add('aadhaar', 'Aadhaar number must be 12 digits');
+      break;
+    case 'documents':
+      requiredDocumentSlots(application).forEach((slot) => {
+        if (application.documents?.[slot.key]?.status !== 'uploaded') {
+          add(slot.key, application.documents?.[slot.key]?.status === 'uploading'
+            ? `Wait for ${slot.label} to finish uploading`
+            : `${slot.label} is required before continuing`);
+        }
+      });
+      break;
     default:
       break;
   }
@@ -750,7 +837,7 @@ function ProcessPage({ onNavigate }) {
     { title: 'Documents submission', copy: 'Submit the offline admission form with your documents to obtain the PI report.' },
   ];
   const portalSteps = [
-    'Register with your details and verify the email OTP.',
+    'Create an account with your details and sign in. No email OTP is required.',
     'Sign in and fill the multi-section application form; save drafts any time.',
     'Upload the required documents into labelled slots.',
     'Preview everything, then submit to lock the form and receive an application number.',
@@ -892,24 +979,31 @@ function AuthShell({ children, onNavigate }) {
 }
 
 function Field({ label, icon: Icon, hint, wide = false, ...inputProps }) {
+  const fieldErrors = useContext(ApplicationFieldErrorsContext);
+  const error = fieldErrors[inputProps.name];
+  const errorId = error ? `application-error-${inputProps.name}` : undefined;
   return (
-    <label className={`field${wide ? ' field--wide' : ''}`}>
+    <label className={`field${wide ? ' field--wide' : ''}${error ? ' field--invalid' : ''}`}>
       <span className="field__label">{label}</span>
       <span className="field__control">
         {Icon && <Icon size={17} weight="regular" aria-hidden="true" />}
-        <input {...inputProps} />
+        <input {...inputProps} aria-invalid={error ? 'true' : undefined} aria-describedby={errorId} />
       </span>
       {hint && <small className="field__hint">{hint}</small>}
+      {error && <small className="field__error" id={errorId}>{error}</small>}
     </label>
   );
 }
 
 function SelectField({ label, name, value, onChange, options, placeholder, required, wide = false, hint }) {
+  const fieldErrors = useContext(ApplicationFieldErrorsContext);
+  const error = fieldErrors[name];
+  const errorId = error ? `application-error-${name}` : undefined;
   return (
-    <label className={`field${wide ? ' field--wide' : ''}`}>
+    <label className={`field${wide ? ' field--wide' : ''}${error ? ' field--invalid' : ''}`}>
       <span className="field__label">{label}</span>
       <span className="select-control">
-        <select name={name} value={value ?? ''} onChange={onChange} required={required}>
+        <select name={name} value={value ?? ''} onChange={onChange} required={required} aria-invalid={error ? 'true' : undefined} aria-describedby={errorId}>
           {placeholder && <option value="">{placeholder}</option>}
           {options.map((option) => {
             const optionValue = typeof option === 'string' ? option : option.value;
@@ -920,16 +1014,21 @@ function SelectField({ label, name, value, onChange, options, placeholder, requi
         <CaretDown size={16} />
       </span>
       {hint && <small className="field__hint">{hint}</small>}
+      {error && <small className="field__error" id={errorId}>{error}</small>}
     </label>
   );
 }
 
 function TextArea({ label, name, value, onChange, wide = false, hint, ...props }) {
+  const fieldErrors = useContext(ApplicationFieldErrorsContext);
+  const error = fieldErrors[name];
+  const errorId = error ? `application-error-${name}` : undefined;
   return (
-    <label className={`field${wide ? ' field--wide' : ''}`}>
+    <label className={`field${wide ? ' field--wide' : ''}${error ? ' field--invalid' : ''}`}>
       <span className="field__label">{label}</span>
-      <textarea name={name} value={value ?? ''} onChange={onChange} {...props} />
+      <textarea name={name} value={value ?? ''} onChange={onChange} {...props} aria-invalid={error ? 'true' : undefined} aria-describedby={errorId} />
       {hint && <small className="field__hint">{hint}</small>}
+      {error && <small className="field__error" id={errorId}>{error}</small>}
     </label>
   );
 }
@@ -973,7 +1072,7 @@ function RegistrationPage({ onNavigate, onRegistered }) {
         <p className="registration-intro__lead">Create your applicant account to begin your admission journey at IEM.</p>
         <div className="registration-benefits">
           <div><span><LockKey size={19} /></span><p><strong>Secure registration</strong><small>Your personal details are protected.</small></p></div>
-          <div><span><ShieldCheck size={19} /></span><p><strong>Verified access</strong><small>Confirm your account with a one-time code.</small></p></div>
+          <div><span><ShieldCheck size={19} /></span><p><strong>Easy sign-in</strong><small>Start using your account right after registration.</small></p></div>
           <div><span><CheckCircle size={19} /></span><p><strong>Track your application</strong><small>Keep documents, fees and status together.</small></p></div>
         </div>
         <div className="legacy-note">
@@ -1083,40 +1182,6 @@ function useCountdown(initial) {
   }, []);
   const label = `${String(Math.floor(seconds / 60)).padStart(2, '0')}:${String(seconds % 60).padStart(2, '0')}`;
   return [seconds, label, setSeconds];
-}
-
-function OtpPage({ onNavigate, onVerified, mobile }) {
-  const [digits, setDigits] = useState(['', '', '', '', '', '']);
-  const [message, setMessage] = useState('');
-  const [seconds, formatted, setSeconds] = useCountdown(OTP_VERIFY_SECONDS);
-
-  const verify = (event) => {
-    event.preventDefault();
-    if (digits.some((digit) => !digit)) {
-      setMessage('Enter all six digits to continue.');
-      return;
-    }
-    onVerified();
-  };
-  return (
-    <main className="otp-stage">
-      <section className="otp-card">
-        <button className="back-link" onClick={() => onNavigate('register')} type="button"><ArrowLeft size={16} /> Back to registration</button>
-        <span className="otp-icon"><EnvelopeSimple size={22} /></span>
-        <h1>Verify your account</h1>
-        <p className="otp-copy">We’ve sent a one-time code valid for 10 minutes to</p>
-        <strong className="otp-phone">{mobile ? `+91 XXXXX ${mobile.slice(-5)}` : 'your email address'}</strong>
-        <form onSubmit={verify}>
-          <label className="otp-label">Enter OTP</label>
-          <OtpInputs digits={digits} onChange={setDigits} />
-          <p className="otp-countdown">{seconds ? `OTP expires in ${formatted}` : 'Code expired. Request a new one.'}</p>
-          {message && <p className="form-error" role="alert">{message}</p>}
-          <button className="button button--charcoal button--full" type="submit">Verify &amp; Continue</button>
-        </form>
-        <button className="resend-button" onClick={() => { setSeconds(OTP_VERIFY_SECONDS); setDigits(['', '', '', '', '', '']); setMessage('A new code has been sent.'); }} type="button">Resend OTP</button>
-      </section>
-    </main>
-  );
 }
 
 function ForgotPasswordPage({ onNavigate }) {
@@ -1274,16 +1339,39 @@ function StatusBadge({ status }) {
 }
 
 function StatusTimeline({ status }) {
-  const reached = APPLICATION_STATUSES.indexOf(status);
-  const visible = ['Draft', 'Submitted', 'Under Review', 'Approved', 'Admission Confirmed'];
+  const visible = status === 'Rejected'
+    ? ['Draft', 'Submitted', 'Under Review', 'Rejected']
+    : ['Draft', 'Submitted', 'Under Review', ...(status === 'Correction Requested' ? ['Correction Requested'] : []), 'Approved', 'Admission Confirmed'];
+  const statusOrder = {
+    Draft: 0,
+    Submitted: 1,
+    'Under Review': 2,
+    'Correction Requested': 2.5,
+    Approved: 3,
+    Rejected: 3,
+    'Admission Confirmed': 4,
+  };
+  const reached = statusOrder[status] ?? 0;
+  const completedStatuses = new Set(['Submitted', 'Approved', 'Admission Confirmed', 'Rejected']);
   return (
     <ol className="status-timeline">
       {visible.map((label) => {
-        const index = APPLICATION_STATUSES.indexOf(label);
-        const state = index < reached ? 'done' : index === reached ? 'current' : 'todo';
+        const order = statusOrder[label] ?? 0;
+        const isCurrent = label === status;
+        const state = order < reached || (isCurrent && completedStatuses.has(status))
+          ? 'done'
+          : isCurrent
+            ? status === 'Correction Requested' ? 'correction' : 'current'
+            : 'todo';
         return (
           <li className={`status-node status-node--${state}`} key={label}>
-            <span className="status-node__marker">{state === 'done' ? <Check size={13} weight="bold" /> : <Clock size={13} weight="bold" />}</span>
+            <span className="status-node__marker">
+              {state === 'done'
+                ? <Check size={13} weight="bold" />
+                : state === 'correction'
+                  ? <Warning size={13} weight="bold" />
+                  : <Clock size={13} weight="bold" />}
+            </span>
             <span className="status-node__label">{label}</span>
           </li>
         );
@@ -1307,6 +1395,17 @@ function DashboardPage({ application, onNavigate, notifications }) {
         </div>
         <StatusBadge status={status} />
       </div>
+      {status === 'Correction Requested' && (
+        <section className="app-alert app-alert--warning correction-alert" aria-labelledby="correction-alert-title">
+          <Warning size={18} />
+          <div>
+            <strong id="correction-alert-title">Action required: corrections requested</strong>
+            {application.flaggedSections?.length > 0 && <p>Update these sections: {application.flaggedSections.join(', ')}.</p>}
+            {application.decisionReason && <p>{application.decisionReason}</p>}
+          </div>
+          <button className="button button--dark button--small" onClick={() => onNavigate('application')} type="button">Review corrections <ArrowRight size={14} /></button>
+        </section>
+      )}
 
       <div className="dashboard-grid">
         <section className="dash-card dash-card--status">
@@ -1356,12 +1455,14 @@ function DashboardPage({ application, onNavigate, notifications }) {
   );
 }
 
-function DocumentsPanel({ application, setApplication, readOnly = false, showHeading = true, onDocumentChange }) {
+function DocumentsPanel({ application, setApplication, readOnly = false, showHeading = true, onDocumentChange, onApplicationDirty }) {
   const [errors, setErrors] = useState({});
+  const fieldErrors = useContext(ApplicationFieldErrorsContext);
   const required = requiredDocumentSlots(application);
 
   const upload = async (slotKey, file) => {
     if (!file) return;
+    onApplicationDirty?.();
     if (!ALLOWED_MIME.includes(file.type)) {
       setErrors((current) => ({ ...current, [slotKey]: 'Only PDF, JPG or PNG files are allowed.' }));
       return;
@@ -1423,6 +1524,7 @@ function DocumentsPanel({ application, setApplication, readOnly = false, showHea
   };
 
   const remove = async (slotKey) => {
+    onApplicationDirty?.();
     try {
       await applicationApi.deleteDocument(slotKey);
     } catch {
@@ -1450,7 +1552,7 @@ function DocumentsPanel({ application, setApplication, readOnly = false, showHea
           const isRequired = required.some((item) => item.key === slot.key);
           const conditional = !slot.required && isRequired;
           return (
-            <div className="doc-slot" key={slot.key}>
+            <div className={`doc-slot${fieldErrors[slot.key] ? ' doc-slot--invalid' : ''}`} key={slot.key}>
               <div className="doc-slot__row">
                 <span className={`doc-slot__icon${doc?.status === 'uploaded' ? ' is-done' : ''}`}>
                   {doc?.status === 'uploaded' ? <Check size={16} weight="bold" /> : <FileText size={16} />}
@@ -1483,6 +1585,7 @@ function DocumentsPanel({ application, setApplication, readOnly = false, showHea
               {doc?.status === 'uploading' && (
                 <div className="doc-progress"><span style={{ width: `${doc.progress}%` }} /></div>
               )}
+              {fieldErrors[slot.key] && <p className="field__error" role="alert">{fieldErrors[slot.key]}</p>}
               {errors[slot.key] && <p className="form-error">{errors[slot.key]}</p>}
             </div>
           );
@@ -1516,17 +1619,28 @@ function ReviewGroup({ title, stepIndex, rows, onEdit }) {
   );
 }
 
-function ApplicationPage({ onNavigate, applicantName, application, setApplication, notify }) {
+function ApplicationPage({ onNavigate, applicantName, application, setApplication, notify, onApplicationDirty, onApplicationSaved, getApplicationEditVersion }) {
   const [step, setStep] = useState(0);
   const [notice, setNotice] = useState('');
   const [submitted, setSubmitted] = useState(false);
   const [reviewError, setReviewError] = useState('');
   const [serverErrorsBySection, setServerErrorsBySection] = useState({});
+  const [fieldErrors, setFieldErrors] = useState({});
+  const [validationAttempted, setValidationAttempted] = useState(false);
+  const formRef = useRef(null);
 
   const update = (event) => {
+    onApplicationDirty();
     setServerErrorsBySection({});
+    const { name, value } = event.target;
+    const next = { ...application, [name]: value };
+    if (application.sameAsPresent && name.startsWith('present')) {
+      next[`perm${name.slice('present'.length)}`] = value;
+    }
+    if (validationAttempted) {
+      setFieldErrors(getApplicationFieldErrors(FORM_STEPS[step].key, next));
+    }
     setApplication((current) => {
-      const { name, value } = event.target;
       const next = { ...current, [name]: value, updatedAt: new Date().toISOString() };
       if (current.sameAsPresent && name.startsWith('present')) {
         next[`perm${name.slice('present'.length)}`] = value;
@@ -1535,7 +1649,13 @@ function ApplicationPage({ onNavigate, applicantName, application, setApplicatio
     });
   };
   const updateCheckbox = (event) => {
+    onApplicationDirty();
     setServerErrorsBySection({});
+    const { name, checked } = event.target;
+    const next = { ...application, [name]: checked };
+    if (validationAttempted) {
+      setFieldErrors(getApplicationFieldErrors(FORM_STEPS[step].key, next));
+    }
     setApplication((current) => ({ ...current, [event.target.name]: event.target.checked, updatedAt: new Date().toISOString() }));
   };
 
@@ -1577,12 +1697,26 @@ function ApplicationPage({ onNavigate, applicantName, application, setApplicatio
     }
   }, [program, application.streamId, setApplication]);
 
+  useEffect(() => {
+    if (validationAttempted) {
+      setFieldErrors(getApplicationFieldErrors(FORM_STEPS[step].key, application));
+    }
+  }, [application, step, validationAttempted]);
+
   const saveDraft = async () => {
+    const editVersion = getApplicationEditVersion();
     try {
       const res = await applicationApi.saveDraft(application);
       if (res?.application) {
-        setApplication((current) => ({ ...current, ...res.application }));
+        setApplication((current) => ({
+          ...current,
+          status: res.application.status || current.status,
+          applicationNo: res.application.applicationNo || current.applicationNo,
+          draftSavedAt: res.application.draftSavedAt || current.draftSavedAt,
+          updatedAt: res.application.updatedAt || current.updatedAt,
+        }));
       }
+      onApplicationSaved(editVersion);
       setNotice('Draft saved on server with timestamp. You can resume anytime.');
     } catch {
       setApplication((current) => ({ ...current, status: current.status || 'Draft', updatedAt: new Date().toISOString() }));
@@ -1597,21 +1731,21 @@ function ApplicationPage({ onNavigate, applicantName, application, setApplicatio
       return;
     }
     setReviewError('');
+    const editVersion = getApplicationEditVersion();
 
     try {
       await applicationApi.saveDraft(application);
       const res = await applicationApi.submitApplication(application.declaration === true);
-      const applicationNo = res?.applicationNo || res?.application?.applicationNo || nextApplicationNumber();
-      const now = new Date().toISOString();
+      if (!res?.application || res.application.status !== 'Submitted' || !res.application.applicationNo) {
+        throw new Error('The server did not confirm the application submission. Please refresh and try again.');
+      }
+      const applicationNo = res.applicationNo || res.application.applicationNo;
       setApplication((current) => ({
         ...current,
-        ...(res?.application || {}),
-        status: 'Submitted',
+        ...res.application,
         applicationNo,
-        submittedAt: now,
-        statusChangedAt: now,
-        flaggedSections: [],
       }));
+      onApplicationSaved(editVersion);
       notify(`Application ${applicationNo} submitted and locked. We will review it shortly.`, { type: 'success', link: 'status' });
       setServerErrorsBySection({});
       setSubmitted(true);
@@ -1663,13 +1797,43 @@ function ApplicationPage({ onNavigate, applicantName, application, setApplicatio
         <button className="button button--outline button--draft" onClick={saveDraft} type="button"><FileText size={16} /> Save as Draft</button>
       </div>
       {application.status === 'Correction Requested' && (
-        <p className="app-alert app-alert--warning" role="status"><Warning size={15} /> A correction was requested on: {application.flaggedSections?.join(', ') || 'flagged sections'}. Fix these and resubmit.</p>
+        <div className="app-alert app-alert--warning" role="status">
+          <Warning size={15} />
+          <div>
+            <strong>Corrections requested: {application.flaggedSections?.join(', ') || 'flagged sections'}.</strong>
+            {application.decisionReason && <p>{application.decisionReason}</p>}
+            <p>Update the requested sections and resubmit your application.</p>
+          </div>
+        </div>
       )}
       {notice && <p className="inline-notice" role="status">{notice}</p>}
 
       <Stepper current={step} labels={FORM_STEPS.map((item) => item.label)} />
 
-      <form className="application-form" onSubmit={(event) => { event.preventDefault(); if (step < FORM_STEPS.length - 1) setStep(step + 1); else submit(); }}>
+      <ApplicationFieldErrorsContext.Provider value={fieldErrors}>
+      <form ref={formRef} className="application-form" noValidate onSubmit={async (event) => {
+        event.preventDefault();
+        if (step < FORM_STEPS.length - 1) {
+          setValidationAttempted(true);
+          const errors = getApplicationFieldErrors(FORM_STEPS[step].key, application);
+          Array.from(formRef.current?.elements || []).forEach((element) => {
+            if (element.name && !element.validity.valid && !errors[element.name]) {
+              errors[element.name] = element.validationMessage;
+            }
+          });
+          setFieldErrors(errors);
+          const firstInvalidField = Object.keys(errors)[0];
+          if (firstInvalidField) {
+            formRef.current?.elements.namedItem(firstInvalidField)?.focus();
+            return;
+          }
+          await saveDraft();
+          setValidationAttempted(false);
+          setStep(step + 1);
+        } else {
+          submit();
+        }
+      }}>
         <div className="application-form__heading"><h2>{FORM_STEPS[step].label}</h2><span>Step {step + 1} of {FORM_STEPS.length}</span></div>
 
         {step === 0 && <>
@@ -1895,6 +2059,7 @@ function ApplicationPage({ onNavigate, applicantName, application, setApplicatio
           <DocumentsPanel
             application={application}
             setApplication={setApplication}
+            onApplicationDirty={onApplicationDirty}
             onDocumentChange={() => setServerErrorsBySection({})}
           />
         </>}
@@ -1976,12 +2141,13 @@ function ApplicationPage({ onNavigate, applicantName, application, setApplicatio
         </>}
 
         <div className="application-form__actions">
-          <button className="button button--outline" disabled={step === 0} onClick={() => setStep((current) => current - 1)} type="button"><ArrowLeft size={16} /> Previous</button>
+          <button className="button button--outline" disabled={step === 0} onClick={() => { setValidationAttempted(false); setFieldErrors({}); setStep((current) => current - 1); }} type="button"><ArrowLeft size={16} /> Previous</button>
           {step < FORM_STEPS.length - 1
             ? <button className="button button--dark" type="submit">Save &amp; Continue <ArrowRight size={16} /></button>
             : <button className="button button--charcoal" disabled={!allComplete || application.declaration !== true} type="submit"><SealCheck size={16} /> Submit application</button>}
         </div>
       </form>
+      </ApplicationFieldErrorsContext.Provider>
     </>
   );
 }
@@ -2022,7 +2188,7 @@ function StatusPage({ application, onNavigate, setApplication, notify }) {
             <StatusTimeline status={status} />
             <div className="status-detail">
               <div><span>Programme</span><strong>{program ? `${program.name} · ${stream?.name || ''}` : '—'}</strong></div>
-              {application.decision?.reason && <div><span>Decision note</span><strong>{application.decision.reason}</strong></div>}
+              {(application.decisionReason || application.decision?.reason) && <div><span>Decision note</span><strong>{application.decisionReason || application.decision.reason}</strong></div>}
               {application.flaggedSections?.length > 0 && <div><span>Corrections requested</span><strong>{application.flaggedSections.join(', ')}</strong></div>}
             </div>
           </section>
@@ -2060,7 +2226,7 @@ function StatusPage({ application, onNavigate, setApplication, notify }) {
   );
 }
 
-function DocumentsPage({ application, setApplication, onNavigate }) {
+function DocumentsPage({ application, setApplication, onNavigate, onApplicationDirty }) {
   const uploaded = Object.keys(application.documents || {}).length;
   return (
     <>
@@ -2069,14 +2235,14 @@ function DocumentsPage({ application, setApplication, onNavigate }) {
         <button className="button button--outline button--draft" onClick={() => onNavigate('application')} type="button"><PencilSimple size={15} /> Open form</button>
       </div>
       <div className="doc-page-card">
-        <DocumentsPanel application={application} setApplication={setApplication} showHeading={false} />
+        <DocumentsPanel application={application} setApplication={setApplication} showHeading={false} onApplicationDirty={onApplicationDirty} />
       </div>
     </>
   );
 }
 
 function httpStatusText() {
-  return 'A real deployment verifies payment on the server (webhook plus a status-API check) before it is marked successful — a browser redirect alone is never trusted.';
+  return 'This development demo records a simulated payment only; no money is transferred. A real deployment must verify payment with the gateway before confirming a seat.';
 }
 
 function bookingAmountFor(application) {
@@ -2086,6 +2252,8 @@ function bookingAmountFor(application) {
 }
 
 function PaymentsPage({ application, setApplication, applicantName, notify, onNavigate }) {
+  const [paying, setPaying] = useState(false);
+  const [paymentError, setPaymentError] = useState('');
   const status = application.status || 'Draft';
   const program = programById(application.programId);
   const stream = streamOf(application);
@@ -2096,21 +2264,25 @@ function PaymentsPage({ application, setApplication, applicantName, notify, onNa
   const applicationFee = 0;
   const paid = status === 'Admission Confirmed' && application.payment;
 
-  const pay = (method) => {
-    const now = new Date().toISOString();
-    const payment = {
-      method,
-      amount: total,
-      receiptNo: nextReceiptNumber(),
-      transactionId: `MOCK-${Date.now().toString().slice(-8)}`,
-      confirmedAt: now,
-      items: [
-        ...(booking ? [{ label: `Booking amount (${application.class12Status === 'Appearing' ? 'class 12 appearing' : 'class 12 passed'})`, amount: booking }] : []),
-        ...FIXED_CHARGES.map((item) => ({ ...item })),
-      ],
-    };
-    setApplication((current) => ({ ...current, status: 'Admission Confirmed', statusChangedAt: now, payment }));
-    notify(`Payment of ${inr(total)} confirmed. Receipt ${payment.receiptNo} is available.`, { type: 'success', link: 'payments' });
+  const pay = async () => {
+    if (paying) return;
+    setPaying(true);
+    setPaymentError('');
+    try {
+      const result = await applicationApi.recordDemoPayment();
+      const confirmed = result.application;
+      setApplication((current) => ({
+        ...current,
+        status: confirmed.status,
+        statusChangedAt: confirmed.statusChangedAt,
+        payment: confirmed.payment,
+      }));
+      notify(result.message, { type: 'success', link: 'payments' });
+    } catch (error) {
+      setPaymentError(error.message || 'Could not record the demo payment.');
+    } finally {
+      setPaying(false);
+    }
   };
 
   const downloadReceipt = () => {
@@ -2184,7 +2356,7 @@ function PaymentsPage({ application, setApplication, applicantName, notify, onNa
             <div className="payment-methods">
               <h2>How payment works</h2>
               <div className="method-list">
-                <div className="method-info"><span><CreditCard size={18} /></span><div><strong>Online (after approval)</strong><small>You are taken to the gateway's hosted page to pay by card, net banking or UPI. We only keep the transaction reference — never card details.</small></div></div>
+                <div className="method-info"><span><CreditCard size={18} /></span><div><strong>Online (after approval)</strong><small>The current development build simulates confirmation only. No payment gateway is connected and no money is transferred.</small></div></div>
                 <div className="method-info"><span><Buildings size={18} /></span><div><strong>NEFT</strong><small>Transfer to the IEM Trust account; an admission officer records the UTR against your application.</small></div></div>
                 <div className="method-info"><span><Receipt size={18} /></span><div><strong>Demand Draft</strong><small>In favour of Institute of Engineering &amp; Management Trust; a DD reference is required to record it.</small></div></div>
               </div>
@@ -2197,9 +2369,14 @@ function PaymentsPage({ application, setApplication, applicantName, notify, onNa
                   <p className="payment-hint">{httpStatusText()}</p>
                   <div className="method-placeholder">
                     <span><LockKey size={21} /></span>
-                    <p>Continue to the hosted gateway to pay securely.</p>
+                    <p>Simulate the payment in this development demo.</p>
                   </div>
-                  <button className="button button--charcoal button--full pay-button" onClick={() => pay('Online gateway')} type="button"><LockKey size={15} /> Pay Now <strong>{inr(total)}</strong></button>
+                  {booking == null
+                    ? <p className="payment-hint" role="status">A booking amount is not published for this programme and stream.</p>
+                    : import.meta.env.DEV
+                      ? <button className="button button--charcoal button--full pay-button" disabled={paying} onClick={pay} type="button"><LockKey size={15} /> {paying ? 'Processing…' : 'Pay now'} <strong>{inr(total)}</strong></button>
+                      : <p className="payment-hint" role="status">Payment processing is not configured for this deployment.</p>}
+                  {paymentError && <p className="form-error" role="alert">{paymentError}</p>}
                 </>
               ) : (
                 <div className="payment-locked">
@@ -2368,37 +2545,46 @@ function AiChatbox({ open, onOpen, onClose }) {
 
 function AppContent() {
   const auth = useAuth();
-  const [page, setPage] = useState('home');
+  const [page, setPage] = useState(() => {
+    try {
+      return window.localStorage.getItem('iem_cached_user') ? 'dashboard' : 'home';
+    } catch {
+      return 'home';
+    }
+  });
   const [user, setUser] = usePersistentState('iem-user', null);
-  const [lastOtpCode, setLastOtpCode] = useState('');
   const userScope = `:${user?.email || user?.mobile || 'guest'}`;
   const [application, setApplication] = usePersistentState(`iem-application${userScope}`, {});
+  const applicationRef = useRef(application);
+  applicationRef.current = application;
+  const applicationDirtyRef = useRef(false);
+  const applicationEditVersionRef = useRef(0);
   const [notifications, setNotifications] = usePersistentState(`iem-notifications${userScope}`, []);
   const [aiOpen, setAiOpen] = useState(false);
+  const markApplicationDirty = () => {
+    applicationDirtyRef.current = true;
+    applicationEditVersionRef.current += 1;
+  };
+  const markApplicationSaved = (savedVersion) => {
+    if (applicationEditVersionRef.current === savedVersion) {
+      applicationDirtyRef.current = false;
+    }
+  };
 
   useEffect(() => {
+    applicationDirtyRef.current = false;
+    applicationEditVersionRef.current = 0;
+  }, [userScope]);
+
+  useEffect(() => {
+    if (auth.loading) return;
     if (auth.user) {
       setUser(auth.user);
-      if (
-        auth.user.role !== 'applicant'
-        || window.location.pathname.replace(/\/+$/, '') === '/admin'
-      ) return;
-      applicationApi
-        .getMyApplication()
-        .then((res) => {
-          if (res?.application) {
-            setApplication((prev) => ({
-              ...prev,
-              ...res.application,
-              documents: res.application.documents || prev.documents || {},
-            }));
-          }
-        })
-        .catch(() => {
-          // Fallback to cached state
-        });
+    } else {
+      setUser(null);
+      setPage((current) => ['register', 'login', 'forgot'].includes(current) ? current : 'home');
     }
-  }, [auth.user]);
+  }, [auth.loading, auth.user, setUser]);
 
   const go = (next) => {
     if (next === 'logout') {
@@ -2420,10 +2606,98 @@ function AppContent() {
   };
 
   useEffect(() => {
+    if (!auth.user) return;
+    setUser(auth.user);
+    if (
+      auth.user.role !== 'applicant'
+      || window.location.pathname.replace(/\/+$/, '') === '/admin'
+    ) return;
+
+    let active = true;
+    const refreshApplication = async () => {
+      try {
+        const res = await applicationApi.getMyApplication();
+        if (!active || !res?.application) return;
+
+        const latest = res.application;
+        const previous = applicationRef.current;
+        const previousStatus = previous.status;
+        const status = latest.status || 'Draft';
+        if (applicationDirtyRef.current) {
+          setApplication((current) => ({
+            ...current,
+            status: latest.status || current.status,
+            applicationNo: latest.applicationNo || current.applicationNo,
+            submittedAt: latest.submittedAt || current.submittedAt,
+            statusChangedAt: latest.statusChangedAt || current.statusChangedAt,
+            flaggedSections: latest.flaggedSections || current.flaggedSections,
+            decisionReason: latest.decisionReason || current.decisionReason,
+            payment: latest.payment || current.payment,
+          }));
+        } else {
+          setApplication((current) => ({
+            ...current,
+            ...latest,
+            documents: latest.documents || current.documents || {},
+          }));
+        }
+
+        const statusChangedAt = latest.statusChangedAt || latest.updatedAt || '';
+        const eventKey = `application-status:${status}:${statusChangedAt}`;
+        if (previousStatus !== status || status === 'Correction Requested') {
+          const correctionDetails = [
+            latest.flaggedSections?.length ? `Sections to correct: ${latest.flaggedSections.join(', ')}.` : '',
+            latest.decisionReason || '',
+          ].filter(Boolean).join(' ');
+          const messages = {
+            Submitted: 'Your application has been submitted.',
+            'Under Review': 'Your application is now under review.',
+            'Correction Requested': `Corrections have been requested. ${correctionDetails}`.trim(),
+            Approved: 'Your application has been approved.',
+            Rejected: `Your application was rejected.${latest.decisionReason ? ` ${latest.decisionReason}` : ''}`,
+            'Admission Confirmed': 'Your admission has been confirmed.',
+          };
+          const message = messages[status];
+          if (message) {
+            setNotifications((current) => current.some((item) => item.eventKey === eventKey)
+              ? current
+              : [{
+                id: `${Date.now()}-${Math.random().toString(16).slice(2, 6)}`,
+                eventKey,
+                message,
+                type: status === 'Correction Requested' || status === 'Rejected' ? 'warning' : 'success',
+                link: status === 'Correction Requested' ? 'application' : 'status',
+                read: false,
+                at: statusChangedAt || new Date().toISOString(),
+              }, ...current]);
+          }
+        }
+      } catch {
+        // Keep showing cached application state while the API is unavailable.
+      }
+    };
+
+    refreshApplication();
+    const intervalId = window.setInterval(refreshApplication, 15000);
+    const refreshWhenVisible = () => {
+      if (document.visibilityState === 'visible') refreshApplication();
+    };
+    window.addEventListener('focus', refreshApplication);
+    document.addEventListener('visibilitychange', refreshWhenVisible);
+
+    return () => {
+      active = false;
+      window.clearInterval(intervalId);
+      window.removeEventListener('focus', refreshApplication);
+      document.removeEventListener('visibilitychange', refreshWhenVisible);
+    };
+  }, [auth.user, page, setApplication, setNotifications, setUser]);
+
+  useEffect(() => {
     const titles = {
       home: 'IEM Admissions | Apply for 2026-27', courses: 'Courses | IEM Admissions', process: 'Admission Process | IEM Admissions',
       faqs: 'FAQs | IEM Admissions', contact: 'Contact Us | IEM Admissions', register: 'Create account | IEM Admissions',
-      login: 'Sign in | IEM Admissions', verify: 'Verify account | IEM Admissions', forgot: 'Password recovery | IEM Admissions',
+      login: 'Sign in | IEM Admissions', forgot: 'Password recovery | IEM Admissions',
       application: 'Application | IEM Admissions', status: 'My Application | IEM Admissions', documents: 'Documents | IEM Admissions',
       payments: 'Payments | IEM Admissions', profile: 'Profile | IEM Admissions', dashboard: 'Dashboard | IEM Admissions',
     };
@@ -2438,17 +2712,15 @@ function AppContent() {
     }
   }, [auth.loading, auth.user]);
 
-  const applicantName = user?.fullName || 'Applicant';
+  const applicantName = auth.user?.fullName || user?.fullName || 'Applicant';
 
-  const register = (account) => {
-    setUser(account);
-    notify('Account created. Enter the OTP we emailed you to verify it.', { type: 'info', link: 'dashboard' });
-    setPage('verify');
-  };
+  if (auth.loading) {
+    return <main className="admin-entry__loading" aria-live="polite">Restoring your session…</main>;
+  }
 
-  const verify = () => {
-    notify('Email verified. Welcome to the IEM admissions portal.', { type: 'success', link: 'dashboard' });
-    setPage('dashboard');
+  const register = () => {
+    notify('Account created. You can now sign in.', { type: 'success', link: 'login' });
+    setPage('login');
   };
 
   const login = (account) => {
@@ -2486,10 +2758,7 @@ function AppContent() {
         <main>
           <RegistrationForm
             onNavigate={go}
-            onRegistered={(account) => {
-              register(account.user || account);
-              if (account.otpCode) setLastOtpCode(account.otpCode);
-            }}
+            onRegistered={register}
           />
         </main>
         <Footer />
@@ -2507,21 +2776,6 @@ function AppContent() {
       </div>
     );
   }
-  if (page === 'verify') {
-    return (
-      <div className="auth-page">
-        <PublicHeader onNavigate={go} />
-        <OtpModal
-          email={user?.email}
-          mobile={user?.mobile}
-          initialCode={lastOtpCode}
-          onNavigate={go}
-          onVerified={verify}
-        />
-        <Footer />
-      </div>
-    );
-  }
   if (page === 'forgot') {
     return (
       <div className="auth-page">
@@ -2534,7 +2788,7 @@ function AppContent() {
 
   const isApplicantPage = ['dashboard', 'application', 'status', 'documents', 'payments', 'profile'].includes(page);
   if (isApplicantPage) {
-    if (!user) {
+    if (!auth.user) {
       return (
         <div className="auth-page">
           <PublicHeader onNavigate={go} />
@@ -2545,15 +2799,24 @@ function AppContent() {
         </div>
       );
     }
-    if (user.role === 'admin') {
-      return <AdminPortal user={user} onLogout={() => go('logout')} />;
+    if (auth.user.role === 'admin') {
+      return <AdminPortal user={auth.user} onLogout={() => go('logout')} />;
     }
     let content;
-    if (page === 'application') content = <ApplicationPage onNavigate={go} applicantName={applicantName} application={application} setApplication={setApplication} notify={notify} />;
+    if (page === 'application') content = <ApplicationPage
+      onNavigate={go}
+      applicantName={applicantName}
+      application={application}
+      setApplication={setApplication}
+      notify={notify}
+      onApplicationDirty={markApplicationDirty}
+      onApplicationSaved={markApplicationSaved}
+      getApplicationEditVersion={() => applicationEditVersionRef.current}
+    />;
     else if (page === 'status') content = <StatusPage application={application} setApplication={setApplication} onNavigate={go} notify={notify} />;
-    else if (page === 'documents') content = <DocumentsPage application={application} setApplication={setApplication} onNavigate={go} />;
+    else if (page === 'documents') content = <DocumentsPage application={application} setApplication={setApplication} onNavigate={go} onApplicationDirty={markApplicationDirty} />;
     else if (page === 'payments') content = <PaymentsPage application={application} setApplication={setApplication} applicantName={applicantName} notify={notify} onNavigate={go} />;
-    else if (page === 'profile') content = <ProfilePage user={user} onNavigate={go} onLogout={() => go('logout')} />;
+    else if (page === 'profile') content = <ProfilePage user={auth.user} onNavigate={go} onLogout={() => go('logout')} />;
     else content = <DashboardPage application={application} onNavigate={go} notifications={notifications} />;
     return (
       <>

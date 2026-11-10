@@ -31,44 +31,9 @@ authRouter.post('/register', authRateLimiter, async (req, res, next) => {
 
     res.status(201).json({
       success: true,
-      message: 'Account created successfully. Enter the OTP sent to your email to verify.',
+      message: 'Account created successfully. You can now sign in.',
       user: result.user,
-      otpCode: result.otpCode, // Available in dev/test environments
     });
-  } catch (err) {
-    next(err);
-  }
-});
-
-/**
- * POST /api/auth/verify-otp
- */
-authRouter.post('/verify-otp', async (req, res, next) => {
-  try {
-    const { email, otp } = req.body;
-    if (!email || !otp) {
-      throw new BadRequestError('Email and OTP code are required');
-    }
-
-    const result = await authService.verifyOtp({ email, otp });
-    res.status(200).json(result);
-  } catch (err) {
-    next(err);
-  }
-});
-
-/**
- * POST /api/auth/resend-otp
- */
-authRouter.post('/resend-otp', async (req, res, next) => {
-  try {
-    const { email } = req.body;
-    if (!email) {
-      throw new BadRequestError('Email is required');
-    }
-
-    const result = await authService.resendOtp({ email });
-    res.status(200).json(result);
   } catch (err) {
     next(err);
   }

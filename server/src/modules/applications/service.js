@@ -14,6 +14,7 @@ import {
   ALLOWED_MIME_TYPES,
   MAX_DOCUMENT_FILE_SIZE,
 } from '../../db/validators.js';
+import config from '../../config.js';
 
 // In-memory application storage fallback
 const inMemoryStore = {
@@ -155,7 +156,7 @@ export function mapApplicationRow(row, course = null) {
     pgPercent: row.post_graduate?.percent ?? '',
     pgInstitution: row.post_graduate?.institution || '',
     pgSubjects: row.post_graduate?.subjects || '',
-    category: row.category || 'General',
+    category: row.category || '',
     bloodGroup: row.blood_group || '',
     religion: row.religion || '',
     activities: row.activities || '',
@@ -168,6 +169,19 @@ export function mapApplicationRow(row, course = null) {
     flaggedSections: row.flagged_sections || [],
     createdAt: row.created_at || null,
     updatedAt: row.updated_at || null,
+  };
+}
+
+function mapPaymentRow(row) {
+  return {
+    method: row.gateway_payment_id?.startsWith('MOCK-')
+      ? 'Development demo (no funds transferred)'
+      : row.method,
+    amount: Number(row.amount),
+    receiptNo: row.receipt_number,
+    transactionId: row.gateway_payment_id || '',
+    confirmedAt: row.created_at,
+    items: row.line_items || [],
   };
 }
 
@@ -362,7 +376,7 @@ export class ApplicationService {
         countryCode: user.countryCode || '+91',
         gender: '',
         dob: '',
-        category: 'General',
+        category: '',
         programId: '',
         streamId: '',
         sameAsPresent: false,
@@ -382,7 +396,7 @@ export class ApplicationService {
             full_name: newApp.fullName,
             email: newApp.email,
             mobile: newApp.mobile,
-            category: newApp.category,
+            category: null,
             status: 'Draft',
             draft_saved_at: newApp.draftSavedAt,
           })
@@ -407,8 +421,29 @@ export class ApplicationService {
       application = mapApplicationRow(application, course);
     }
 
+    let payment = application.payment || null;
+    if (client && application.id) {
+      const { data: paymentRow, error } = await client
+        .from('payments')
+        .select('amount, line_items, method, gateway_payment_id, receipt_number, created_at')
+        .eq('application_id', application.id)
+        .eq('kind', 'admission')
+        .eq('status', 'success')
+        .order('created_at', { ascending: false })
+        .limit(1)
+        .maybeSingle();
+
+      if (error) {
+        throw new BadRequestError(`Could not load payment: ${error.message}`);
+      }
+      if (paymentRow) {
+        payment = mapPaymentRow(paymentRow);
+      }
+    }
+
     return {
       ...application,
+      payment,
       documents: documentsMap,
     };
   }
@@ -602,7 +637,7 @@ export class ApplicationService {
             institution: updated.pgInstitution,
             subjects: updated.pgSubjects,
           },
-          category: updated.category || 'General',
+          category: updated.category || null,
           blood_group: updated.bloodGroup,
           religion: updated.religion,
           activities: updated.activities,
@@ -685,7 +720,7 @@ export class ApplicationService {
 
     const client = getSupabaseClient();
     if (client) {
-      await client
+      const { data: updatedApplication, error } = await client
         .from('applications')
         .update({
           application_no: applicationNo,
@@ -695,7 +730,15 @@ export class ApplicationService {
           flagged_sections: [],
           updated_at: now,
         })
-        .eq('id', app.id);
+        .eq('id', app.id)
+        .select('id')
+        .maybeSingle();
+      if (error) {
+        throw new InternalServerError(`Could not submit application: ${error.message}`);
+      }
+      if (!updatedApplication) {
+        throw new InternalServerError('Could not submit application: the application record was not updated.');
+      }
     } else {
       inMemoryStore.applications.set(user.id, submittedApp);
       inMemoryStore.applicationsById.set(app.id, submittedApp);
@@ -706,6 +749,118 @@ export class ApplicationService {
       message: 'Application successfully submitted and locked for review.',
       applicationNo,
       application: submittedApp,
+    };
+  }
+
+  async recordDemoPayment(user) {
+    if (config.nodeEnv !== 'development') {
+      throw new ForbiddenError('Simulated payments are only available in development.');
+    }
+
+    const application = await this.getOrCreateApplication(user);
+    if (application.status === 'AdmissionConfirmed' && application.payment) {
+      return {
+        success: true,
+        message: 'The demo payment is already recorded.',
+        application,
+      };
+    }
+    if (application.status !== 'Approved') {
+      throw new ConflictError('Payment is only available after the application is approved.');
+    }
+
+    const program = application.programId
+      ? COURSE_BY_ID[application.programId.toLowerCase()]
+      : null;
+    const stream = program?.streams.find((item) => item.id === application.streamId);
+    const bookingAmount = stream?.booking?.[
+      application.class12Status === 'Appearing' ? 'appearing' : 'passed'
+    ];
+    if (bookingAmount == null) {
+      throw new BadRequestError('A booking amount is not published for this programme and stream.');
+    }
+
+    const items = [
+      {
+        label: `Booking amount (${application.class12Status === 'Appearing' ? 'class 12 appearing' : 'class 12 passed'})`,
+        amount: bookingAmount,
+      },
+      { label: 'Uniform', amount: 6500 },
+      { label: 'Medical fitness report', amount: 1000 },
+    ];
+    const amount = items.reduce((total, item) => total + item.amount, 0);
+    const now = new Date().toISOString();
+    const transactionId = `MOCK-${crypto.randomUUID()}`;
+    const receiptNo = `IEM-DEMO-${new Date().getFullYear()}-${crypto.randomUUID().slice(0, 8).toUpperCase()}`;
+    const client = getSupabaseClient();
+    let payment = application.payment;
+
+    if (client && !payment) {
+      const { data: paymentRow, error: paymentError } = await client
+        .from('payments')
+        .insert({
+          application_id: application.id,
+          kind: 'admission',
+          amount,
+          line_items: items,
+          method: 'online',
+          gateway_payment_id: transactionId,
+          status: 'success',
+          receipt_number: receiptNo,
+          created_at: now,
+          updated_at: now,
+        })
+        .select('amount, line_items, method, gateway_payment_id, receipt_number, created_at')
+        .single();
+
+      if (paymentError) {
+        throw new BadRequestError(`Could not record demo payment: ${paymentError.message}`);
+      }
+      payment = mapPaymentRow(paymentRow);
+    } else if (!client && !payment) {
+      payment = {
+        method: 'Development demo (no funds transferred)',
+        amount,
+        receiptNo,
+        transactionId,
+        confirmedAt: now,
+        items,
+      };
+    }
+
+    if (client) {
+      const { data: updatedRow, error: statusError } = await client
+        .from('applications')
+        .update({ status: 'AdmissionConfirmed', status_changed_at: now, updated_at: now })
+        .eq('id', application.id)
+        .eq('status', 'Approved')
+        .select('id')
+        .maybeSingle();
+
+      if (statusError) {
+        throw new BadRequestError(`Payment was recorded, but application status could not be updated: ${statusError.message}`);
+      }
+      if (!updatedRow) {
+        throw new ConflictError('Application status changed before the demo payment could be confirmed.');
+      }
+    }
+
+    const updatedApplication = {
+      ...application,
+      status: 'AdmissionConfirmed',
+      statusChangedAt: now,
+      updatedAt: now,
+      payment,
+    };
+    if (!client) {
+      inMemoryStore.applications.set(user.id, updatedApplication);
+      inMemoryStore.applicationsById.set(application.id, updatedApplication);
+    }
+
+    return {
+      success: true,
+      message: 'Development demo payment recorded. No funds were transferred.',
+      application: updatedApplication,
     };
   }
 
@@ -1153,10 +1308,20 @@ export class ApplicationService {
         })
         .eq('id', applicationId);
     } else {
-      app.status = decision;
-      app.decision = { by: adminUser.id, at: now, reason: reason || null };
-      app.statusChangedAt = now;
-      app.updatedAt = now;
+      const updatedApp = {
+        ...app,
+        status: decision,
+        decision: { by: adminUser.id, at: now, reason: reason || null },
+        statusChangedAt: now,
+        updatedAt: now,
+      };
+      inMemoryStore.applicationsById.set(applicationId, updatedApp);
+      for (const [userId, userApp] of inMemoryStore.applications.entries()) {
+        if (userApp.id === applicationId) {
+          inMemoryStore.applications.set(userId, updatedApp);
+          break;
+        }
+      }
     }
 
     return {
@@ -1176,7 +1341,7 @@ export class ApplicationService {
 
     const client = getSupabaseClient();
     if (client) {
-      await client
+      const { data: updatedApplication, error } = await client
         .from('applications')
         .update({
           status: 'CorrectionRequested',
@@ -1185,13 +1350,22 @@ export class ApplicationService {
           status_changed_at: now,
           updated_at: now,
         })
-        .eq('id', applicationId);
+        .eq('id', applicationId)
+        .select('id')
+        .maybeSingle();
+      if (error) {
+        throw new InternalServerError(`Could not request application correction: ${error.message}`);
+      }
+      if (!updatedApplication) {
+        throw new InternalServerError('Could not request application correction: the application record was not updated.');
+      }
     } else {
       // Build an updated application object and write it back to both maps
       const updatedApp = {
         ...app,
         status: 'CorrectionRequested',
         flaggedSections,
+        decisionReason: comment || '',
         statusChangedAt: now,
         updatedAt: now,
       };
@@ -1210,6 +1384,7 @@ export class ApplicationService {
       message: 'Correction requested from applicant.',
       status: 'CorrectionRequested',
       flaggedSections,
+      comment: comment || '',
     };
   }
 

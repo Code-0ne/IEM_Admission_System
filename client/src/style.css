@@ -1075,6 +1075,26 @@ textarea:focus-visible {
   flex: 0 0 auto;
   color: var(--text-secondary);
 }
+.password-control input {
+  flex: 1;
+}
+.password-visibility {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  border-radius: 4px;
+  color: var(--text-secondary);
+}
+.password-visibility:hover {
+  color: var(--navy);
+}
+.password-visibility:focus-visible {
+  outline: 2px solid var(--navy);
+  outline-offset: 2px;
+}
 .field__control input,
 .field__control select,
 .select-control select,
@@ -1108,6 +1128,23 @@ textarea:focus-visible {
   font-size: 12px;
   color: var(--text-secondary);
 }
+.field__error {
+  color: var(--red);
+  font-size: 12px;
+  line-height: 1.4;
+}
+.field--invalid .field__control,
+.field--invalid .select-control,
+.field--invalid textarea {
+  border-color: var(--red);
+  background: var(--red-soft);
+}
+.field--invalid .field__control:focus-within,
+.field--invalid .select-control:focus-within,
+.field--invalid textarea:focus {
+  border-color: var(--red);
+  box-shadow: 0 0 0 3px rgba(196, 30, 58, 0.12);
+}
 .field textarea {
   min-height: 100px;
   padding: 14px;
@@ -1124,6 +1161,9 @@ textarea:focus-visible {
   font-size: 13px;
   line-height: 1.6;
   color: var(--text-secondary);
+}
+.consent-row--invalid {
+  color: var(--red);
 }
 .consent-row input {
   margin-top: 4px;
@@ -2651,6 +2691,25 @@ textarea:focus-visible {
   background: var(--warning-soft);
   color: var(--warning);
 }
+.app-alert > div {
+  flex: 1;
+  min-width: 0;
+}
+.app-alert p {
+  margin-top: 4px;
+}
+.correction-alert {
+  align-items: flex-start;
+  margin: -8px 0 24px;
+  padding: 16px;
+}
+.correction-alert strong {
+  display: block;
+}
+.correction-alert .button {
+  flex: 0 0 auto;
+  margin-left: 8px;
+}
 
 /* ---- Status timeline ---- */
 .status-timeline {
@@ -2678,7 +2737,7 @@ textarea:focus-visible {
   height: 2px;
   background: var(--border);
 }
-.status-node.is-done:not(:last-child)::after {
+.status-node--done:not(:last-child)::after {
   background: var(--navy);
 }
 .status-node__marker {
@@ -2714,6 +2773,15 @@ textarea:focus-visible {
 }
 .status-node--current .status-node__label {
   color: var(--red);
+}
+.status-node--correction .status-node__marker {
+  border-color: var(--warning);
+  background: var(--warning-soft);
+  color: var(--warning);
+  box-shadow: 0 0 0 4px var(--warning-soft);
+}
+.status-node--correction .status-node__label {
+  color: var(--warning);
 }
 
 /* ---- Dashboard ---- */
@@ -3122,6 +3190,10 @@ textarea:focus-visible {
 .doc-slot:has(.doc-slot__icon.is-done) {
   border-color: rgba(5, 150, 105, 0.4);
   background: var(--success-soft);
+}
+.doc-slot--invalid {
+  border-color: var(--red);
+  background: var(--red-soft);
 }
 .doc-slot__row {
   display: flex;
@@ -4592,6 +4664,12 @@ textarea:focus-visible {
     flex-direction: column;
     align-items: flex-start;
     gap: 10px;
+  }
+  .correction-alert {
+    flex-direction: column;
+  }
+  .correction-alert .button {
+    margin-left: 0;
   }
   .dashboard-title h1 {
     font-size: 22px;
